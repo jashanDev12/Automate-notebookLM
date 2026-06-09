@@ -66,6 +66,16 @@ type BackgroundDefinition = {
 declare function defineBackground(main: () => void): BackgroundDefinition;
 declare function defineBackground(definition: BackgroundDefinition): BackgroundDefinition;
 
+type ContentScriptDefinition = {
+  matches: string[];
+  runAt?: 'document_start' | 'document_end' | 'document_idle';
+  main: () => void;
+};
+
+declare function defineContentScript(
+  definition: ContentScriptDefinition,
+): ContentScriptDefinition;
+
 interface ImportMetaEnv {
   readonly MANIFEST_VERSION: 2 | 3;
   readonly BROWSER: string;

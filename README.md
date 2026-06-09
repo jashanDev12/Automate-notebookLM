@@ -104,6 +104,10 @@ npm run zip        # distributable .zip for Chrome Web Store or manual install
 
 Load `.output/chrome-mv3` the same way as in the quickstart (Load unpacked).
 
+## Architecture & implementation context
+
+For a full technical guide (flows, modules, state machine, pitfalls, AI onboarding), see **[IMPLEMENTATION.md](./IMPLEMENTATION.md)**.
+
 ## Project layout
 
 ```

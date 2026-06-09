@@ -20,6 +20,7 @@ import {
   needsVideoPrep,
 } from '../../lib/chunker';
 import { listNotebooks } from '../../lib/rpc';
+import { getLatestStoredJob } from '../../lib/chunk-store';
 import { uploadQueue } from '../../lib/queue';
 import type { Notebook, UploadJob, VideoPrepMode } from '../../lib/types';
 
@@ -40,14 +41,15 @@ export default function App() {
   const [logCopied, setLogCopied] = useState(false);
 
   const handleDone = useCallback(() => {
-    uploadQueue.clearPreparedChunks();
+    const jobId = job?.id;
+    void uploadQueue.clearPreparedChunks(jobId);
     setSelectedFile(null);
     setJob(null);
     setError(null);
     setWarning(null);
     setShowPrepDialog(false);
-    log.info('User dismissed upload summary');
-  }, []);
+    log.info('User dismissed upload summary', { jobId });
+  }, [job?.id]);
 
   const loadNotebooks = useCallback(async () => {
     setLoadingNotebooks(true);
@@ -94,6 +96,20 @@ export default function App() {
       setConnecting(false);
     }
   };
+
+  useEffect(() => {
+    void getLatestStoredJob().then((stored) => {
+      if (!stored || uploadQueue.isRunning) return;
+      uploadQueue.hydrateFromStore(stored.chunks, stored.job.id);
+      setJob(stored.job);
+      if (stored.job.notebookId) setNotebookId(stored.job.notebookId);
+      log.info('Restored upload from local storage', {
+        jobId: stored.job.id,
+        file: stored.job.originalName,
+        phase: stored.job.phase,
+      });
+    });
+  }, []);
 
   useEffect(() => {
     let debounceId: ReturnType<typeof setTimeout> | null = null;
@@ -174,29 +190,8 @@ export default function App() {
     void runUpload(mode);
   };
 
-  const handleRetryFailed = async () => {
-    if (!job || job.phase !== 'done') return;
-    const jobSnapshot = job;
-    setBusy(true);
-    setError(null);
-    log.info('Retry failed parts clicked');
-    try {
-      await uploadQueue.retryFailed(jobSnapshot, (updated) => {
-        setJob({ ...updated, chunks: [...updated.chunks] });
-      });
-    } catch (err) {
-      if ((err as Error).name !== 'AbortError') {
-        const msg = err instanceof Error ? err.message : String(err);
-        log.error('retry failed', err, formatError(err));
-        setError(msg);
-      }
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const handleRetryChunk = async (chunkIndex: number) => {
-    if (!job || job.phase !== 'done') return;
+    if (!job || job.phase !== 'done' || busy || uploadQueue.isRunning) return;
     const jobSnapshot = job;
     setBusy(true);
     setError(null);
@@ -320,7 +315,7 @@ export default function App() {
         />
 
         <FileDropZone
-          disabled={busy || job?.phase === 'done'}
+          disabled={busy || job?.phase === 'done' || job?.phase === 'retrying'}
           onFileSelected={(file) => {
             setSelectedFile(file);
             setJob(null);
@@ -352,7 +347,7 @@ export default function App() {
           <p className="text-sm text-amber-700">Select a target notebook above to enable upload.</p>
         )}
 
-        {job?.phase !== 'done' && (
+        {job?.phase !== 'done' && job?.phase !== 'retrying' && (
           <div className="flex gap-2">
             <button
               type="button"
@@ -364,9 +359,13 @@ export default function App() {
                 ? job?.phase === 'preparing' && job.prepProgress
                   ? `Splitting… ${Math.min(100, job.prepProgress.percent)}%`
                   : job?.phase === 'uploading' && job.chunks.length > 0
-                    ? job.chunks.some((c) => c.status === 'processing')
-                      ? 'Processing on NotebookLM…'
-                      : `Uploading… ${computeUploadPercent(job)}%`
+                    ? job.chunks.some(
+                        (c) => c.status === 'processing' || c.status === 'polling',
+                      )
+                      ? 'NotebookLM processing…'
+                      : job.chunks.some((c) => c.status === 'uploaded')
+                        ? 'Uploaded — waiting for NotebookLM…'
+                        : `Uploading… ${computeUploadPercent(job)}%`
                     : 'Working…'
                 : 'Start Upload'}
             </button>
@@ -386,9 +385,10 @@ export default function App() {
           job={job}
           notebookTitle={notebooks.find((n) => n.id === notebookId)?.title}
           busy={busy}
-          onRetryFailed={job?.phase === 'done' ? () => void handleRetryFailed() : undefined}
-          onRetryChunk={job?.phase === 'done' ? (i) => void handleRetryChunk(i) : undefined}
-          onDone={job?.phase === 'done' ? handleDone : undefined}
+          onRetryChunk={
+            job?.phase === 'done' ? (i) => void handleRetryChunk(i) : undefined
+          }
+          onDone={job?.phase === 'done' || job?.phase === 'retrying' ? handleDone : undefined}
         />
       </main>
 

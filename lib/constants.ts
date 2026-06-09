@@ -24,8 +24,21 @@ export const RPC_METHODS = {
   UPDATE_SOURCE: 'b7Wfje',
 } as const;
 
-/** Default wait for NotebookLM to finish processing an uploaded source. */
-export const SOURCE_PROCESSING_TIMEOUT_MS = 180_000;
+/** Minimum wait for NotebookLM to finish processing an uploaded source. */
+export const SOURCE_PROCESSING_TIMEOUT_MS = 600_000;
+
+/** Extra wait per MiB of uploaded file (large videos need more time). */
+export const SOURCE_PROCESSING_TIMEOUT_PER_MIB_MS = 45_000;
+
+/** Upper cap so polling does not run forever. */
+export const SOURCE_PROCESSING_TIMEOUT_MAX_MS = 3_600_000;
+
+/** Compute processing wait from file size (10 min minimum, up to 1 hour). */
+export function computeSourceProcessingTimeoutMs(fileSizeBytes: number): number {
+  const mib = fileSizeBytes / (1024 * 1024);
+  const scaled = SOURCE_PROCESSING_TIMEOUT_MS + Math.round(mib * SOURCE_PROCESSING_TIMEOUT_PER_MIB_MS);
+  return Math.min(SOURCE_PROCESSING_TIMEOUT_MAX_MS, Math.max(SOURCE_PROCESSING_TIMEOUT_MS, scaled));
+}
 
 export const ALLOWED_COOKIE_DOMAINS = new Set([
   '.google.com',

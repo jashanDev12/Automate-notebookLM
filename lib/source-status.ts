@@ -1,4 +1,8 @@
-import { RPC_METHODS, SOURCE_PROCESSING_TIMEOUT_MS } from './constants';
+import {
+  RPC_METHODS,
+  SOURCE_PROCESSING_TIMEOUT_MS,
+  computeSourceProcessingTimeoutMs,
+} from './constants';
 import { RpcError } from './decoder';
 import { createLogger } from './logger';
 import { rpcCall } from './rpc';
@@ -153,12 +157,23 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
+export interface SourcePollUpdate {
+  polls: number;
+  /** True when GET_NOTEBOOK returned a row for this sourceId. */
+  sourceVisible: boolean;
+  status: SourceStatus | null;
+}
+
 export interface WaitForSourceOptions {
   timeoutMs?: number;
+  /** When set, timeout defaults to a size-based value if timeoutMs is omitted. */
+  fileSizeBytes?: number;
   initialIntervalMs?: number;
   maxIntervalMs?: number;
   backoffFactor?: number;
   signal?: AbortSignal;
+  /** Called after each status check while waiting for NotebookLM. */
+  onPoll?: (update: SourcePollUpdate) => void;
 }
 
 /**
@@ -172,7 +187,11 @@ export async function waitForSourceReady(
   filename: string,
   options: WaitForSourceOptions = {},
 ): Promise<NotebookSource> {
-  const timeoutMs = options.timeoutMs ?? SOURCE_PROCESSING_TIMEOUT_MS;
+  const timeoutMs =
+    options.timeoutMs ??
+    (options.fileSizeBytes != null
+      ? computeSourceProcessingTimeoutMs(options.fileSizeBytes)
+      : SOURCE_PROCESSING_TIMEOUT_MS);
   const initialIntervalMs = options.initialIntervalMs ?? 1000;
   const maxIntervalMs = options.maxIntervalMs ?? 10_000;
   const backoffFactor = options.backoffFactor ?? 1.5;
@@ -201,8 +220,10 @@ export async function waitForSourceReady(
 
     if (!source) {
       log.debug('Source not yet visible in notebook list', { sourceId, polls });
+      options.onPoll?.({ polls, sourceVisible: false, status: null });
     } else {
       lastStatus = source.status;
+      options.onPoll?.({ polls, sourceVisible: true, status: source.status });
 
       if (source.status === SourceStatus.READY) {
         log.info('Source processing complete', { sourceId, filename, polls });

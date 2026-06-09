@@ -24,6 +24,28 @@ type ContentMessage =
 
 const BRIDGE_FLAG = '__notebooklmMegaUploaderBridge';
 
+function isContentMessage(value: { type?: string }): value is ContentMessage {
+  switch (value.type) {
+    case 'NLM_PING':
+    case 'NLM_GET_SESSION':
+    case 'NLM_FETCH':
+    case 'NLM_UPLOAD_INIT':
+    case 'NLM_UPLOAD_CHUNK':
+    case 'NLM_UPLOAD_FINALIZE':
+      return true;
+    default:
+      return false;
+  }
+}
+
+function headersToRecord(headers: Headers): Record<string, string> {
+  const out: Record<string, string> = {};
+  headers.forEach((value, key) => {
+    out[key] = value;
+  });
+  return out;
+}
+
 export default defineContentScript({
   matches: ['https://notebooklm.google.com/*', 'https://notebooklm.cloud.google.com/*'],
   runAt: 'document_idle',
@@ -31,7 +53,8 @@ export default defineContentScript({
     if ((globalThis as Record<string, unknown>)[BRIDGE_FLAG]) return;
     (globalThis as Record<string, unknown>)[BRIDGE_FLAG] = true;
 
-    chrome.runtime.onMessage.addListener((message: ContentMessage, _sender, sendResponse) => {
+    chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+      if (!sendResponse || !isContentMessage(message)) return;
       void handleMessage(message)
         .then((result) => sendResponse(result))
         .catch((err: unknown) => {
@@ -81,7 +104,7 @@ async function handleMessage(message: ContentMessage): Promise<unknown> {
       return {
         ok: response.ok,
         status: response.status,
-        headers: Object.fromEntries(response.headers.entries()),
+        headers: headersToRecord(response.headers),
         body: await response.text(),
       };
     }
@@ -102,7 +125,7 @@ async function handleMessage(message: ContentMessage): Promise<unknown> {
       const parts = uploadBuffers.get(message.uploadId);
       if (!parts) throw new Error('Upload session expired — try again.');
       uploadBuffers.delete(message.uploadId);
-      const blob = new Blob(parts);
+      const blob = new Blob(parts as BlobPart[]);
       const response = await fetch(message.url, {
         method: message.method ?? 'POST',
         headers: message.headers,

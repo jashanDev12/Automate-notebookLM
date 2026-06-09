@@ -10,11 +10,22 @@ export interface FileChunk {
   size: number;
 }
 
-export type ChunkStatus = 'pending' | 'uploading' | 'processing' | 'completed' | 'failed';
+/** Why a chunk failed — drives retry behavior (poll-only vs re-upload). */
+export type ChunkFailureKind = 'upload' | 'processing_timeout' | 'processing' | 'cancelled';
+
+export type ChunkStatus =
+  | 'pending'
+  | 'registering'
+  | 'uploading'
+  | 'uploaded'
+  | 'processing'
+  | 'polling'
+  | 'completed'
+  | 'failed';
 
 export type VideoPrepMode = 'compress' | 'split';
 
-export type JobPhase = 'idle' | 'preparing' | 'uploading' | 'done';
+export type JobPhase = 'idle' | 'preparing' | 'uploading' | 'retrying' | 'done';
 
 export interface PrepProgress {
   message: string;
@@ -29,8 +40,12 @@ export interface ChunkProgress {
   size: number;
   status: ChunkStatus;
   bytesSent: number;
+  /** Extra context for polling/processing (e.g. poll count). */
+  statusDetail?: string;
   error?: string;
   sourceId?: string;
+  /** Set when status is failed — avoids re-uploading after a processing timeout. */
+  failureKind?: ChunkFailureKind;
 }
 
 export type UploadJobStatus =
@@ -49,6 +64,8 @@ export interface UploadJob {
   status: UploadJobStatus;
   phase: JobPhase;
   prepProgress?: PrepProgress;
+  /** Set while a single failed part is being retried. */
+  retryingChunkIndex?: number;
 }
 
 export interface AuthSession {
