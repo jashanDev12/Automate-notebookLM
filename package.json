@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "dev": "wxt",
+    "dev:browser": "node scripts/dev-browser.mjs",
     "dev:firefox": "wxt -b firefox",
     "build": "wxt build",
     "zip": "wxt zip",

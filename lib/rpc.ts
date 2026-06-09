@@ -1,6 +1,11 @@
 import { BATCHEXECUTE_URL, RPC_METHODS } from './constants';
 import { decodeResponse, extractSourceId, RpcError } from './decoder';
+import { createLogger, previewText, sessionLogContext } from './logger';
+import { readTabSession } from './tab-session';
+import { tabProxyFetch } from './tab-proxy';
 import type { AuthSession, Notebook } from './types';
+
+const log = createLogger('rpc');
 
 function encodeRpcRequest(rpcId: string, params: unknown[]): unknown[][][] {
   const paramsJson = JSON.stringify(params);
@@ -23,38 +28,100 @@ function buildRpcUrl(
     'f.sid': session.sessionId,
     hl: 'en',
     rt: 'c',
-    authuser: session.authuser,
   });
+  if (session.authuser !== undefined && session.authuser !== '') {
+    params.set('authuser', session.authuser);
+  }
   return `${BATCHEXECUTE_URL}?${params}`;
 }
 
-async function rpcCall(
+async function withFreshTabSession(session: AuthSession): Promise<AuthSession> {
+  if (!session.tabId) return session;
+  log.debug('Refreshing session tokens from tab', { tabId: session.tabId });
+  const fresh = await readTabSession(session.tabId);
+  return {
+    ...session,
+    csrfToken: fresh.csrfToken,
+    sessionId: fresh.sessionId,
+    authuser: fresh.authuser,
+  };
+}
+
+export async function rpcCall(
   session: AuthSession,
   rpcId: string,
   params: unknown[],
   sourcePath = '/',
 ): Promise<unknown> {
-  const url = buildRpcUrl(rpcId, session, sourcePath);
-  const body = buildRequestBody(encodeRpcRequest(rpcId, params), session.csrfToken);
+  const started = performance.now();
+  const liveSession = await withFreshTabSession(session);
+  const url = buildRpcUrl(rpcId, liveSession, sourcePath);
+  const bodyText = buildRequestBody(encodeRpcRequest(rpcId, params), liveSession.csrfToken);
+  const headers = {
+    'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+    Origin: 'https://notebooklm.google.com',
+    Referer: 'https://notebooklm.google.com/',
+  };
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
-      Cookie: session.cookieHeader,
-      Origin: 'https://notebooklm.google.com',
-      Referer: 'https://notebooklm.google.com/',
-    },
-    body,
-    credentials: 'omit',
+  log.info(`RPC ${rpcId} → start`, {
+    rpcId,
+    sourcePath,
+    transport: liveSession.tabId ? 'tab-proxy' : 'extension-fetch',
+    session: sessionLogContext(liveSession),
   });
 
-  if (!response.ok) {
-    throw new RpcError(`HTTP ${response.status} calling ${rpcId}`, rpcId);
-  }
+  let text: string;
+  let ok: boolean;
+  let status: number;
 
-  const text = await response.text();
-  return decodeResponse(text, rpcId);
+  try {
+    if (liveSession.tabId) {
+      const result = await tabProxyFetch(liveSession.tabId, url, {
+        method: 'POST',
+        headers,
+        bodyText,
+      });
+      ok = result.ok;
+      status = result.status;
+      text = result.body;
+    } else {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          ...headers,
+          Cookie: liveSession.cookieHeader,
+        },
+        body: bodyText,
+        credentials: 'omit',
+      });
+      ok = response.ok;
+      status = response.status;
+      text = await response.text();
+    }
+
+    if (!ok) {
+      log.error(`RPC ${rpcId} HTTP error`, undefined, {
+        status,
+        responsePreview: previewText(text),
+      });
+      throw new RpcError(`HTTP ${status} calling ${rpcId}`, rpcId);
+    }
+
+    const decoded = decodeResponse(text, rpcId);
+    log.info(`RPC ${rpcId} ← ok`, {
+      rpcId,
+      ms: Math.round(performance.now() - started),
+      responseLen: text.length,
+    });
+    return decoded;
+  } catch (err) {
+    log.error(`RPC ${rpcId} failed`, err, {
+      rpcId,
+      ms: Math.round(performance.now() - started),
+      session: sessionLogContext(liveSession),
+    });
+    throw err;
+  }
 }
 
 function parseNotebook(row: unknown): Notebook | null {
@@ -70,12 +137,18 @@ export async function listNotebooks(session: AuthSession): Promise<Notebook[]> {
   const params = [null, 1, null, [2]];
   const result = await rpcCall(session, RPC_METHODS.LIST_NOTEBOOKS, params);
 
-  if (!Array.isArray(result) || result.length === 0) return [];
+  if (!Array.isArray(result) || result.length === 0) {
+    log.warn('LIST_NOTEBOOKS returned empty array');
+    return [];
+  }
 
   const raw = Array.isArray(result[0]) ? result[0] : result;
-  return raw
+  const notebooks = raw
     .map(parseNotebook)
     .filter((nb): nb is Notebook => nb !== null);
+
+  log.info('Notebooks loaded', { count: notebooks.length });
+  return notebooks;
 }
 
 export async function registerFileSource(
@@ -99,7 +172,13 @@ export async function registerFileSource(
 
   const sourceId = extractSourceId(result);
   if (!sourceId) {
+    log.error('ADD_SOURCE_FILE: could not extract source ID', undefined, {
+      filename,
+      notebookId,
+    });
     throw new RpcError(`Failed to extract SOURCE_ID for ${filename}`);
   }
+
+  log.info('Source registered', { filename, sourceId, notebookId });
   return sourceId;
 }

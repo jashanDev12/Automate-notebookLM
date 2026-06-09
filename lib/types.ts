@@ -10,11 +10,11 @@ export interface FileChunk {
   size: number;
 }
 
-export type ChunkStatus = 'pending' | 'uploading' | 'completed' | 'failed';
+export type ChunkStatus = 'pending' | 'uploading' | 'processing' | 'completed' | 'failed';
 
 export type VideoPrepMode = 'compress' | 'split';
 
-export type JobPhase = 'idle' | 'preparing' | 'uploading';
+export type JobPhase = 'idle' | 'preparing' | 'uploading' | 'done';
 
 export interface PrepProgress {
   message: string;
@@ -54,8 +54,10 @@ export interface UploadJob {
 export interface AuthSession {
   csrfToken: string;
   sessionId: string;
-  authuser: string;
+  authuser?: string;
   cookieHeader: string;
+  /** API calls run inside this signed-in NotebookLM tab (session cookies not readable). */
+  tabId?: number;
 }
 
 export type UploadProgressCallback = (job: UploadJob) => void;

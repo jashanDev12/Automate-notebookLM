@@ -8,6 +8,9 @@ export const MAX_CHUNK_BYTES = 200 * 1024 * 1024 - 1;
 /** Target size for video segments (margin below hard limit). */
 export const TARGET_CHUNK_BYTES = 190 * 1024 * 1024;
 
+/** Conservative target for stream-copy splits (keyframes often exceed average bitrate). */
+export const TARGET_SPLIT_BYTES = 100 * 1024 * 1024;
+
 /** Warn when source exceeds this size (browser memory). */
 export const WARN_SOURCE_BYTES = 1024 * 1024 * 1024;
 
@@ -16,9 +19,13 @@ export const MAX_SOURCE_BYTES = 2 * 1024 * 1024 * 1024;
 
 export const RPC_METHODS = {
   LIST_NOTEBOOKS: 'wXbhsf',
+  GET_NOTEBOOK: 'rLM1Ne',
   ADD_SOURCE_FILE: 'o4cbdc',
   UPDATE_SOURCE: 'b7Wfje',
 } as const;
+
+/** Default wait for NotebookLM to finish processing an uploaded source. */
+export const SOURCE_PROCESSING_TIMEOUT_MS = 180_000;
 
 export const ALLOWED_COOKIE_DOMAINS = new Set([
   '.google.com',

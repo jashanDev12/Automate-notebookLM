@@ -7,7 +7,7 @@ declare namespace chrome {
       domain: string;
       path: string;
     }
-    function getAll(details: { domain?: string }): Promise<Cookie[]>;
+    function getAll(details: { domain?: string; url?: string }): Promise<Cookie[]>;
   }
   namespace runtime {
     interface InstalledDetails {
@@ -16,17 +16,44 @@ declare namespace chrome {
     const onInstalled: {
       addListener(callback: (details: InstalledDetails) => void): void;
     };
+    function getURL(path: string): string;
+    type RuntimeMessageListener = (
+      message: { type?: string },
+      sender?: unknown,
+      sendResponse?: (response?: unknown) => void,
+    ) => void | boolean;
+    const onMessage: {
+      addListener(callback: RuntimeMessageListener): void;
+      removeListener(callback: RuntimeMessageListener): void;
+    };
+    function sendMessage(message: { type: string }): Promise<void>;
   }
   namespace sidePanel {
     function setPanelBehavior(details: {
       openPanelOnActionClick: boolean;
     }): Promise<void>;
   }
-  namespace runtime {
-    function getURL(path: string): string;
-  }
   namespace tabs {
     function create(props: { url: string; active?: boolean }): Promise<{ id?: number }>;
+    function query(queryInfo: {
+      url?: string | string[];
+    }): Promise<Array<{ id?: number; url?: string }>>;
+    const onUpdated: {
+      addListener(
+        callback: (
+          tabId: number,
+          changeInfo: { status?: string },
+          tab: { url?: string },
+        ) => void,
+      ): void;
+    };
+  }
+  namespace scripting {
+    function executeScript(injection: {
+      target: { tabId: number };
+      func: (...args: unknown[]) => unknown;
+      args?: unknown[];
+    }): Promise<Array<{ result?: unknown }>>;
   }
 }
 
@@ -47,4 +74,9 @@ interface ImportMetaEnv {
 
 interface ImportMeta {
   readonly env: ImportMetaEnv;
+}
+
+declare module '*?url' {
+  const url: string;
+  export default url;
 }

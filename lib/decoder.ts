@@ -2,6 +2,10 @@
  * Decode NotebookLM batchexecute responses (ported from notebooklm-py).
  */
 
+import { createLogger, previewText } from './logger';
+
+const log = createLogger('rpc-decode');
+
 export class RpcError extends Error {
   constructor(
     message: string,
@@ -65,46 +69,56 @@ function collectRpcIds(chunks: unknown[]): string[] {
   const ids: string[] = [];
   for (const chunk of chunks) {
     if (!Array.isArray(chunk)) continue;
-    for (const item of chunk) {
-      if (Array.isArray(item) && typeof item[0] === 'string' && item[0].startsWith('wrb.fr')) {
-        const data = item[1];
-        if (Array.isArray(data) && typeof data[1] === 'string') {
-          ids.push(data[1]);
-        }
+    const items = Array.isArray(chunk[0]) ? chunk : [chunk];
+    for (const item of items) {
+      if (!Array.isArray(item) || item.length < 2) continue;
+      const tag = item[0];
+      const id = item[1];
+      if ((tag === 'wrb.fr' || tag === 'er') && typeof id === 'string') {
+        ids.push(id);
       }
     }
   }
   return ids;
 }
 
+const SENTINEL_NO_RESULT = Symbol('no-result');
+
 function extractRpcResult(chunks: unknown[], rpcId: string): unknown {
-  let lastResult: unknown = undefined;
-  let found = false;
+  let lastResult: unknown = SENTINEL_NO_RESULT;
 
   for (const chunk of chunks) {
     if (!Array.isArray(chunk)) continue;
-    for (const item of chunk) {
-      if (!Array.isArray(item) || item[0] !== 'wrb.fr') continue;
-      const data = item[1];
-      if (!Array.isArray(data) || data.length < 3) continue;
-      const id = data[1];
-      const resultData = data[2];
-      if (id !== rpcId) continue;
-      found = true;
+    const items = Array.isArray(chunk[0]) ? chunk : [chunk];
 
+    for (const item of items) {
+      if (!Array.isArray(item) || item.length < 3) continue;
+      const tag = item[0];
+      const id = item[1];
+      const resultData = item[2];
+
+      if (tag === 'er' && id === rpcId) {
+        throw new RpcError(`RPC error ${resultData ?? 'unknown'}`, rpcId);
+      }
+
+      if (tag !== 'wrb.fr' || id !== rpcId) continue;
+
+      let parsed: unknown = resultData;
       if (typeof resultData === 'string') {
         try {
-          lastResult = JSON.parse(resultData);
+          parsed = JSON.parse(resultData);
         } catch {
-          lastResult = resultData;
+          parsed = resultData;
         }
-      } else {
-        lastResult = resultData;
+      }
+
+      if (parsed !== null || lastResult === SENTINEL_NO_RESULT) {
+        lastResult = parsed;
       }
     }
   }
 
-  if (!found) {
+  if (lastResult === SENTINEL_NO_RESULT) {
     const ids = collectRpcIds(chunks);
     throw new RpcError(
       `No result for RPC ${rpcId}. Found IDs: ${ids.join(', ') || 'none'}`,
@@ -115,10 +129,57 @@ function extractRpcResult(chunks: unknown[], rpcId: string): unknown {
   return lastResult;
 }
 
+function parseJsonErrorBody(raw: string, rpcId: string): void {
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith('{')) return;
+  try {
+    const json = JSON.parse(trimmed) as { error?: { message?: string; code?: number } };
+    if (json.error) {
+      const msg = json.error.message ?? JSON.stringify(json.error);
+      if (json.error.code === 400 && msg.toLowerCase().includes('token')) {
+        throw new RpcError(
+          'Session token expired. Refresh the NotebookLM tab (F5), then click Refresh here.',
+          rpcId,
+        );
+      }
+      throw new RpcError(`NotebookLM API error: ${msg}`, rpcId);
+    }
+  } catch (err) {
+    if (err instanceof RpcError) throw err;
+  }
+}
+
 export function decodeResponse(raw: string, rpcId: string): unknown {
   const cleaned = stripAntiXssi(raw);
-  const chunks = parseChunkedResponse(cleaned);
-  return extractRpcResult(chunks, rpcId);
+
+  try {
+    parseJsonErrorBody(cleaned, rpcId);
+
+    if (!cleaned.trim()) {
+      throw new RpcError(
+        'Empty response from NotebookLM. Refresh the NotebookLM tab (F5), then try again.',
+        rpcId,
+      );
+    }
+
+    const chunks = parseChunkedResponse(cleaned);
+    log.debug('Parsed RPC response chunks', {
+      rpcId,
+      chunkCount: chunks.length,
+      foundIds: collectRpcIds(chunks),
+    });
+    return extractRpcResult(chunks, rpcId);
+  } catch (err) {
+    const chunks = parseChunkedResponse(cleaned);
+    log.error('Failed to decode batchexecute response', err, {
+      rpcId,
+      responseLen: raw.length,
+      responsePreview: previewText(raw),
+      foundIds: collectRpcIds(chunks),
+      chunkCount: chunks.length,
+    });
+    throw err;
+  }
 }
 
 const UUID_RE =

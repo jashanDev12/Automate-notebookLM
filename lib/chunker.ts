@@ -6,8 +6,11 @@ import {
   VIDEO_EXTENSIONS,
   WARN_SOURCE_BYTES,
 } from './constants';
+import { createLogger } from './logger';
 import type { FileChunk, VideoPrepMode } from './types';
 import { compressVideo, splitVideo, type VideoPrepProgress } from './video/ffmpeg';
+
+const log = createLogger('chunker');
 
 function getExtension(filename: string): string {
   const dot = filename.lastIndexOf('.');
@@ -127,6 +130,12 @@ export async function prepareFileChunks(
   if (!videoPrepMode) {
     throw new Error('Video preparation mode required for files over 200 MB');
   }
+
+  log.info('Starting video prep', {
+    mode: videoPrepMode,
+    name: file.name,
+    sizeMb: (file.size / (1024 * 1024)).toFixed(1),
+  });
 
   if (videoPrepMode === 'compress') {
     const part = await compressVideo(file, onPrepProgress, signal);
