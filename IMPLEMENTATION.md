@@ -79,6 +79,9 @@ flowchart TB
   Upload --> Scotty
   BG --> CS
   Logger --> BG
+
+  App --> ArtifactService
+  ArtifactService --> RPC
 ```
 
 ### Why a content-script bridge exists
@@ -529,4 +532,20 @@ Load unpacked extension from `.output/chrome-mv3-dev` in **normal Chrome** (wher
 
 ---
 
-*Last updated to reflect: post-upload processing poll, IndexedDB persistence, single-part retry flow, and tab-proxy architecture.*
+## 19. Artifact Export
+
+The extension allows exporting NotebookLM artifacts (Quizzes, Flashcards, and Mind Maps) in various formats.
+
+### Core Logic (`lib/artifacts.ts`)
+
+- **Quiz/Flashcards:** Fetches interactive HTML via RPC `v9rmvd`, extracts JSON from `data-app-data` attribute, and formats it into Markdown or JSON.
+- **Mind Map:** Fetches interactive tree via RPC `v9rmvd` (response index `[0][9][3]`) and exports as hierarchical JSON.
+
+### UI Integration
+
+- **`components/ArtifactList.tsx`**: Lists exportable artifacts for the active notebook.
+- **Tabbed View:** `App.tsx` features an **Export** tab to access the artifact list separately from the upload queue.
+
+---
+
+*Last updated to reflect: artifact export (quiz, flashcards, mind map), post-upload processing poll, IndexedDB persistence, single-part retry flow, and tab-proxy architecture.*

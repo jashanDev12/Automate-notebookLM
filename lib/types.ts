@@ -3,6 +3,32 @@ export interface Notebook {
   title: string;
 }
 
+export type ArtifactType = 'audio' | 'video' | 'quiz' | 'flashcards' | 'mind_map' | 'report' | 'data_table' | 'slide_deck' | 'infographic' | 'unknown';
+
+export interface Artifact {
+  id: string;
+  title: string;
+  type: ArtifactType;
+  createdAt: number;
+  status: number; // 2 = Ready
+}
+
+export interface QuizQuestion {
+  question: string;
+  answerOptions: { text: string; isCorrect: boolean }[];
+  hint?: string;
+}
+
+export interface Flashcard {
+  front: string;
+  back: string;
+}
+
+export interface MindMapNode {
+  name: string;
+  children?: MindMapNode[];
+}
+
 export interface FileChunk {
   index: number;
   blob: Blob;

@@ -92,6 +92,7 @@ interface Props {
   busy?: boolean;
   onRetryChunk?: (chunkIndex: number) => void;
   onDone?: () => void;
+  onCancel?: () => void;
 }
 
 export function UploadProgress({
@@ -100,6 +101,7 @@ export function UploadProgress({
   busy = false,
   onRetryChunk,
   onDone,
+  onCancel,
 }: Props) {
   const [elapsedSec, setElapsedSec] = useState(0);
   const [logCopied, setLogCopied] = useState(false);
@@ -136,11 +138,22 @@ export function UploadProgress({
         </div>
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-gray-500">
           <span>Elapsed: {formatElapsed(elapsedSec)}</span>
-          {job.prepProgress.part && job.prepProgress.totalParts && (
-            <span>
-              Part {job.prepProgress.part} of {job.prepProgress.totalParts}
-            </span>
-          )}
+          <div className="flex items-center gap-3">
+            {job.prepProgress.part && job.prepProgress.totalParts && (
+              <span>
+                Part {job.prepProgress.part} of {job.prepProgress.totalParts}
+              </span>
+            )}
+            {onCancel && (
+              <button
+                type="button"
+                onClick={onCancel}
+                className="text-nlm-blue hover:underline font-medium"
+              >
+                Cancel
+              </button>
+            )}
+          </div>
         </div>
       </div>
     );
@@ -218,7 +231,18 @@ export function UploadProgress({
           </p>
         </div>
         {!isSummary && (
-          <span className="text-lg font-semibold text-nlm-blue shrink-0">{uploadPct}%</span>
+          <div className="flex flex-col items-end gap-1 shrink-0">
+            <span className="text-lg font-semibold text-nlm-blue leading-none">{uploadPct}%</span>
+            {onCancel && (
+              <button
+                type="button"
+                onClick={onCancel}
+                className="text-[10px] text-nlm-blue hover:underline font-medium uppercase tracking-wider"
+              >
+                Cancel
+              </button>
+            )}
+          </div>
         )}
       </div>
 

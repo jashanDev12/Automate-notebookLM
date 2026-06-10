@@ -3,7 +3,7 @@ import { decodeResponse, extractSourceId, RpcError } from './decoder';
 import { createLogger, previewText, sessionLogContext } from './logger';
 import { readTabSession } from './tab-session';
 import { tabProxyFetch } from './tab-proxy';
-import type { AuthSession, Notebook } from './types';
+import type { AuthSession, Notebook, Artifact } from './types';
 
 const log = createLogger('rpc');
 
@@ -181,4 +181,109 @@ export async function registerFileSource(
 
   log.info('Source registered', { filename, sourceId, notebookId });
   return sourceId;
+}
+
+function parseArtifact(row: unknown): Artifact | null {
+  if (!Array.isArray(row)) return null;
+  const id = typeof row[0] === 'string' ? row[0] : '';
+  const title = typeof row[1] === 'string' ? row[1] : '';
+  const typeCode = typeof row[2] === 'number' ? row[2] : 0;
+  const status = typeof row[4] === 'number' ? row[4] : 0;
+  
+  const timestampBlock = row[15];
+  const createdAt = (Array.isArray(timestampBlock) && typeof timestampBlock[0] === 'number') 
+    ? timestampBlock[0] * 1000 
+    : 0;
+
+  let type: Artifact['type'] = 'unknown';
+  if (typeCode === 1) type = 'audio';
+  else if (typeCode === 2) type = 'report';
+  else if (typeCode === 3) type = 'video';
+  else if (typeCode === 4) {
+    const optionsBlock = row[9];
+    const variant = (Array.isArray(optionsBlock) && Array.isArray(optionsBlock[1]) && typeof optionsBlock[1][0] === 'number') 
+      ? optionsBlock[1][0] 
+      : 0;
+    
+    if (variant === 1) type = 'flashcards';
+    else if (variant === 2) type = 'quiz';
+    else if (variant === 4) type = 'mind_map';
+  } else if (typeCode === 5) type = 'mind_map';
+  else if (typeCode === 7) type = 'infographic';
+  else if (typeCode === 8) type = 'slide_deck';
+  else if (typeCode === 9) type = 'data_table';
+
+  if (!id) return null;
+  return { id, title, type, status, createdAt };
+}
+
+export async function listArtifacts(
+  session: AuthSession,
+  notebookId: string,
+): Promise<Artifact[]> {
+  // Params match standard NotebookLM traffic: [[2], notebookId, query]
+  // The '2' is a static value (likely a version or mask), not a type filter.
+  const params = [[2], notebookId, 'NOT artifact.status = "ARTIFACT_STATUS_SUGGESTED"'];
+  log.debug('listArtifacts request', { notebookId, params });
+  
+  const result = await rpcCall(
+    session,
+    RPC_METHODS.LIST_ARTIFACTS,
+    params,
+    `/notebook/${notebookId}`,
+  );
+
+  if (!Array.isArray(result) || result.length === 0) {
+    log.warn('LIST_ARTIFACTS returned empty or non-array result', { resultPreview: previewText(JSON.stringify(result)) });
+    return [];
+  }
+
+  // Handle nested structure: result[0] is usually the list of rows
+  // but we fallback to result if it looks like the list itself.
+  const raw = (Array.isArray(result[0]) && result[0].length > 0 && Array.isArray(result[0][0])) 
+    ? result[0] 
+    : (Array.isArray(result[0]) ? result[0] : result);
+
+  log.debug('listArtifacts raw rows', { count: raw.length, firstRow: raw[0] });
+
+  const artifacts = raw
+    .map(parseArtifact)
+    .filter((a): a is Artifact => a !== null);
+
+  log.info('Artifacts loaded', { count: artifacts.length });
+  return artifacts;
+}
+
+export async function getInteractiveHtml(
+  session: AuthSession,
+  notebookId: string,
+  artifactId: string,
+): Promise<any> {
+  const params = [artifactId];
+  const result = await rpcCall(
+    session,
+    RPC_METHODS.GET_INTERACTIVE_HTML,
+    params,
+    `/notebook/${notebookId}`,
+  );
+
+  return result;
+}
+
+export async function getArtifactState(
+  session: AuthSession,
+  notebookId: string,
+  artifactId: string,
+): Promise<any> {
+  // Params captured from network traffic: [retry_options, artifact_id]
+  const retryOptions = [2, null, null, [1, null, null, null, null, null, null, null, null, null, [1]], [[1, 4, 8, 2, 3, 6]]];
+  const params = [retryOptions, artifactId];
+  const result = await rpcCall(
+    session,
+    RPC_METHODS.GET_ARTIFACT_STATE,
+    params,
+    `/notebook/${notebookId}`,
+  );
+
+  return result;
 }

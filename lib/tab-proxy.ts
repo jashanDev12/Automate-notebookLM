@@ -222,12 +222,18 @@ export async function tabProxyFetch(
   return result;
 }
 
+export interface TabUploadResult extends TabResponse {
+  ok: boolean;
+  status: number;
+  body: string;
+}
+
 export async function tabProxyBlobUpload(
   tabId: number,
   url: string,
   headers: Record<string, string>,
   blob: Blob,
-): Promise<{ ok: boolean; status: number; body: string }> {
+): Promise<TabUploadResult> {
   const uploadId = crypto.randomUUID();
   log.info('tabProxyBlobUpload start', {
     tabId,
@@ -247,7 +253,7 @@ export async function tabProxyBlobUpload(
     });
   }
 
-  const result = await sendToTab<{ ok: boolean; status: number; body: string }>(tabId, {
+  const result = await sendToTab<TabUploadResult>(tabId, {
     type: 'NLM_UPLOAD_FINALIZE',
     uploadId,
     url,

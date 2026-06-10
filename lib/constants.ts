@@ -22,6 +22,9 @@ export const RPC_METHODS = {
   GET_NOTEBOOK: 'rLM1Ne',
   ADD_SOURCE_FILE: 'o4cbdc',
   UPDATE_SOURCE: 'b7Wfje',
+  LIST_ARTIFACTS: 'gArtLc',
+  GET_INTERACTIVE_HTML: 'v9rmvd',
+  GET_ARTIFACT_STATE: 'ulBSjf',
 } as const;
 
 /** Minimum wait for NotebookLM to finish processing an uploaded source. */
