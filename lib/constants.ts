@@ -8,6 +8,9 @@ export const MAX_CHUNK_BYTES = 200 * 1024 * 1024 - 1;
 /** Target size for video segments (margin below hard limit). */
 export const TARGET_CHUNK_BYTES = 190 * 1024 * 1024;
 
+/** Conservative target for stream-copy splits (keyframes often exceed average bitrate). */
+export const TARGET_SPLIT_BYTES = 100 * 1024 * 1024;
+
 /** Warn when source exceeds this size (browser memory). */
 export const WARN_SOURCE_BYTES = 1024 * 1024 * 1024;
 
@@ -16,9 +19,29 @@ export const MAX_SOURCE_BYTES = 2 * 1024 * 1024 * 1024;
 
 export const RPC_METHODS = {
   LIST_NOTEBOOKS: 'wXbhsf',
+  GET_NOTEBOOK: 'rLM1Ne',
   ADD_SOURCE_FILE: 'o4cbdc',
   UPDATE_SOURCE: 'b7Wfje',
+  LIST_ARTIFACTS: 'gArtLc',
+  GET_INTERACTIVE_HTML: 'v9rmvd',
+  GET_ARTIFACT_STATE: 'ulBSjf',
 } as const;
+
+/** Minimum wait for NotebookLM to finish processing an uploaded source. */
+export const SOURCE_PROCESSING_TIMEOUT_MS = 600_000;
+
+/** Extra wait per MiB of uploaded file (large videos need more time). */
+export const SOURCE_PROCESSING_TIMEOUT_PER_MIB_MS = 45_000;
+
+/** Upper cap so polling does not run forever. */
+export const SOURCE_PROCESSING_TIMEOUT_MAX_MS = 3_600_000;
+
+/** Compute processing wait from file size (10 min minimum, up to 1 hour). */
+export function computeSourceProcessingTimeoutMs(fileSizeBytes: number): number {
+  const mib = fileSizeBytes / (1024 * 1024);
+  const scaled = SOURCE_PROCESSING_TIMEOUT_MS + Math.round(mib * SOURCE_PROCESSING_TIMEOUT_PER_MIB_MS);
+  return Math.min(SOURCE_PROCESSING_TIMEOUT_MAX_MS, Math.max(SOURCE_PROCESSING_TIMEOUT_MS, scaled));
+}
 
 export const ALLOWED_COOKIE_DOMAINS = new Set([
   '.google.com',

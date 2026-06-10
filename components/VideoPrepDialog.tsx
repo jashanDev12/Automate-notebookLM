@@ -32,7 +32,7 @@ export function VideoPrepDialog({ open, fileName, fileSizeMb, onChoose, onCancel
           >
             <p className="font-medium text-gray-900">Split into parts</p>
             <p className="text-xs text-gray-500 mt-0.5">
-              Faster — creates valid MP4 parts under 200 MB each (_Part1, _Part2, …)
+              Recommended — one fast stream-copy pass; ~5–15 min for a 600 MB file
             </p>
           </button>
           <button
@@ -42,7 +42,7 @@ export function VideoPrepDialog({ open, fileName, fileSizeMb, onChoose, onCancel
           >
             <p className="font-medium text-gray-900">Compress to one file</p>
             <p className="text-xs text-gray-500 mt-0.5">
-              Slower — re-encodes to a single source under 200 MB in NotebookLM
+              Much slower for large files (15–45+ min) — re-encodes to one file under 200 MB
             </p>
           </button>
         </div>

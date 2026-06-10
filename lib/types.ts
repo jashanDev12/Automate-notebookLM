@@ -3,6 +3,32 @@ export interface Notebook {
   title: string;
 }
 
+export type ArtifactType = 'audio' | 'video' | 'quiz' | 'flashcards' | 'mind_map' | 'report' | 'data_table' | 'slide_deck' | 'infographic' | 'unknown';
+
+export interface Artifact {
+  id: string;
+  title: string;
+  type: ArtifactType;
+  createdAt: number;
+  status: number; // 2 = Ready
+}
+
+export interface QuizQuestion {
+  question: string;
+  answerOptions: { text: string; isCorrect: boolean }[];
+  hint?: string;
+}
+
+export interface Flashcard {
+  front: string;
+  back: string;
+}
+
+export interface MindMapNode {
+  name: string;
+  children?: MindMapNode[];
+}
+
 export interface FileChunk {
   index: number;
   blob: Blob;
@@ -10,11 +36,22 @@ export interface FileChunk {
   size: number;
 }
 
-export type ChunkStatus = 'pending' | 'uploading' | 'completed' | 'failed';
+/** Why a chunk failed — drives retry behavior (poll-only vs re-upload). */
+export type ChunkFailureKind = 'upload' | 'processing_timeout' | 'processing' | 'cancelled';
+
+export type ChunkStatus =
+  | 'pending'
+  | 'registering'
+  | 'uploading'
+  | 'uploaded'
+  | 'processing'
+  | 'polling'
+  | 'completed'
+  | 'failed';
 
 export type VideoPrepMode = 'compress' | 'split';
 
-export type JobPhase = 'idle' | 'preparing' | 'uploading';
+export type JobPhase = 'idle' | 'preparing' | 'uploading' | 'retrying' | 'done';
 
 export interface PrepProgress {
   message: string;
@@ -29,8 +66,12 @@ export interface ChunkProgress {
   size: number;
   status: ChunkStatus;
   bytesSent: number;
+  /** Extra context for polling/processing (e.g. poll count). */
+  statusDetail?: string;
   error?: string;
   sourceId?: string;
+  /** Set when status is failed — avoids re-uploading after a processing timeout. */
+  failureKind?: ChunkFailureKind;
 }
 
 export type UploadJobStatus =
@@ -49,13 +90,17 @@ export interface UploadJob {
   status: UploadJobStatus;
   phase: JobPhase;
   prepProgress?: PrepProgress;
+  /** Set while a single failed part is being retried. */
+  retryingChunkIndex?: number;
 }
 
 export interface AuthSession {
   csrfToken: string;
   sessionId: string;
-  authuser: string;
+  authuser?: string;
   cookieHeader: string;
+  /** API calls run inside this signed-in NotebookLM tab (session cookies not readable). */
+  tabId?: number;
 }
 
 export type UploadProgressCallback = (job: UploadJob) => void;
