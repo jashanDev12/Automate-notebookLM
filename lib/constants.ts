@@ -9,7 +9,7 @@ export const MAX_CHUNK_BYTES = 200 * 1024 * 1024 - 1;
 export const TARGET_CHUNK_BYTES = 190 * 1024 * 1024;
 
 /** Conservative target for stream-copy splits (keyframes often exceed average bitrate). */
-export const TARGET_SPLIT_BYTES = 100 * 1024 * 1024;
+export const TARGET_SPLIT_BYTES = 170 * 1024 * 1024;
 
 /** Warn when source exceeds this size (browser memory). */
 export const WARN_SOURCE_BYTES = 1024 * 1024 * 1024;
@@ -25,6 +25,7 @@ export const RPC_METHODS = {
   LIST_ARTIFACTS: 'gArtLc',
   GET_INTERACTIVE_HTML: 'v9rmvd',
   GET_ARTIFACT_STATE: 'ulBSjf',
+  EXPORT_ARTIFACT: 'Krh3pd',
 } as const;
 
 /** Minimum wait for NotebookLM to finish processing an uploaded source. */

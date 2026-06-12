@@ -100,16 +100,21 @@ export default function App() {
   };
 
   useEffect(() => {
-    void getLatestStoredJob().then((stored) => {
+    void loadNotebooks();
+    void getLatestStoredJob().then(async (stored) => {
       if (!stored || uploadQueue.isRunning) return;
-      // We don't automatically hydrate/start the job anymore.
-      // This prevents the extension from starting an old upload on restart.
-      // Instead, we just check if there's a stored job and log it for debug.
-      log.info('Found stored upload in local storage', {
+      
+      log.info('Hydrating stored upload from local storage', {
         jobId: stored.job.id,
         file: stored.job.originalName,
         phase: stored.job.phase,
       });
+
+      // Reconcile local state with server state if parts were left mid-processing
+      const verifiedJob = await uploadQueue.verifyAndHydrateStoredJob(stored.job, stored.chunks);
+      
+      setJob(verifiedJob);
+      setNotebookId(verifiedJob.notebookId);
     });
   }, []);
 
@@ -237,7 +242,7 @@ export default function App() {
       />
 
       <header className="bg-white border-b border-nlm-border px-4 py-3">
-        <h1 className="text-lg font-semibold text-gray-900">NotebookLM Mega Uploader</h1>
+        <h1 className="text-lg font-semibold text-gray-900">Learn Flow AI</h1>
         <p className="text-xs text-gray-500 mt-0.5">
           100% local processing · sequential uploads to Google NotebookLM only
         </p>

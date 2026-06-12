@@ -466,6 +466,70 @@ export class SequentialUploadQueue {
     this.activeJobId = jobId;
   }
 
+  /**
+   * Reconcile local job state with NotebookLM on startup.
+   * If parts were left mid-processing, we check Google's servers to see if they
+   * actually finished while the side panel was closed.
+   */
+  async verifyAndHydrateStoredJob(job: UploadJob, chunks: FileChunk[]): Promise<UploadJob> {
+    this.hydrateFromStore(chunks, job.id);
+    let changed = false;
+
+    // Only verify if there is at least one part that might have finished in background
+    const needsVerification = job.chunks.some(
+      (c) => (c.status === 'polling' || c.status === 'processing' || c.status === 'uploading') && c.sourceId,
+    );
+
+    if (needsVerification && job.phase !== 'done') {
+      try {
+        const session = await fetchAuthSession();
+        for (const chunk of job.chunks) {
+          if (
+            (chunk.status === 'polling' || chunk.status === 'processing' || chunk.status === 'uploading') &&
+            chunk.sourceId
+          ) {
+            log.info('Verifying part status with NotebookLM', {
+              jobId: job.id,
+              index: chunk.index + 1,
+              sourceId: chunk.sourceId,
+            });
+
+            const remote = await getNotebookSource(session, job.notebookId, chunk.sourceId);
+            if (remote?.status === SourceStatus.READY) {
+              log.info('Part verified as completed on server', { index: chunk.index + 1 });
+              chunk.status = 'completed';
+              chunk.error = undefined;
+              chunk.failureKind = undefined;
+              changed = true;
+            } else if (remote?.status === SourceStatus.ERROR) {
+              log.warn('Part verified as failed on server', { index: chunk.index + 1 });
+              chunk.status = 'failed';
+              chunk.error = 'Processing failed on NotebookLM servers.';
+              chunk.failureKind = 'processing';
+              changed = true;
+            }
+          }
+        }
+      } catch (err) {
+        log.warn('Verification failed during hydration', { error: formatChunkError(err) });
+      }
+    }
+
+    if (changed) {
+      const allDone = job.chunks.every((c) => c.status === 'completed');
+      if (allDone) {
+        job.status = 'completed';
+        job.phase = 'done';
+      } else if (job.chunks.some((c) => c.status === 'failed')) {
+        job.status = 'failed';
+        job.phase = 'done';
+      }
+      await updateStoredJob(job);
+    }
+
+    return job;
+  }
+
   private async persistJob(job: UploadJob, chunks?: FileChunk[]): Promise<void> {
     try {
       if (chunks) {
@@ -760,6 +824,7 @@ export class SequentialUploadQueue {
       if (jobIndex === undefined) return;
 
       const chunk = job.chunks[jobIndex];
+      const oldPhase = chunk.status;
       chunk.status = p.phase;
       chunk.statusDetail = p.detail;
       if (p.phase === 'uploading') {
@@ -768,6 +833,10 @@ export class SequentialUploadQueue {
         chunk.bytesSent = p.total;
       }
       onProgress({ ...job, chunks: [...job.chunks] });
+      
+      if (oldPhase !== p.phase) {
+        this.touchJob(job);
+      }
     };
 
     // Mark all as pending before we start so UI resets correctly on retry

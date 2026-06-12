@@ -25,7 +25,7 @@ export function ArtifactList({ notebookId }: Props) {
       const session = await fetchAuthSession();
       const list = await listArtifacts(session, notebookId);
       // Filter for exportable types
-      const exportable = list.filter(a => ['quiz', 'flashcards', 'mind_map'].includes(a.type));
+      const exportable = list.filter(a => ['quiz', 'flashcards', 'mind_map', 'slide_deck'].includes(a.type));
       setArtifacts(exportable);
     } catch (err) {
       log.error('Failed to load artifacts', err);
@@ -39,20 +39,27 @@ export function ArtifactList({ notebookId }: Props) {
     void loadArtifacts();
   }, [notebookId]);
 
-  const handleExport = async (artifact: Artifact, format: 'json' | 'markdown' | 'html') => {
+  const handleExport = async (artifact: Artifact, format: 'json' | 'markdown' | 'html' | 'pptx') => {
     setExportingId(artifact.id);
     try {
       const session = await fetchAuthSession();
-      const { content, filename, mimeType } = await exportArtifact(session, notebookId, artifact, format);
+      const { content, filename, mimeType, url } = await exportArtifact(session, notebookId, artifact, format);
       
-      const blob = new Blob([content], { type: mimeType });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      a.click();
-      URL.revokeObjectURL(url);
-      log.info('Artifact exported successfully', { id: artifact.id, filename });
+      if (url) {
+        // For PPTX, the backend gives us a direct download URL
+        chrome.tabs.create({ url });
+        log.info('Artifact export URL opened', { id: artifact.id, url });
+      } else if (content && filename && mimeType) {
+        // For JSON/MD/HTML, we generate the file locally
+        const blob = new Blob([content], { type: mimeType });
+        const objectUrl = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = objectUrl;
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(objectUrl);
+        log.info('Artifact exported successfully', { id: artifact.id, filename });
+      }
     } catch (err) {
       log.error('Export failed', err);
       alert(err instanceof Error ? err.message : String(err));
@@ -95,7 +102,7 @@ export function ArtifactList({ notebookId }: Props) {
 
       {!loading && artifacts.length === 0 && !error && (
         <div className="text-center py-6 text-sm text-gray-500 bg-gray-50 rounded-lg border border-dashed border-gray-200">
-          No quizzes, flashcards, or mind maps found in this notebook.
+          No quizzes, flashcards, slide decks, or mind maps found in this notebook.
         </div>
       )}
 
@@ -117,7 +124,15 @@ export function ArtifactList({ notebookId }: Props) {
             </div>
 
             <div className="flex flex-wrap gap-2 pt-1 border-t border-gray-50 mt-2">
-              {art.type === 'mind_map' ? (
+              {art.type === 'slide_deck' ? (
+                 <button
+                 onClick={() => handleExport(art, 'pptx')}
+                 disabled={exportingId === art.id || art.status !== 3}
+                 className="px-2 py-1 bg-nlm-blue hover:bg-blue-700 text-white rounded text-xs font-medium disabled:opacity-50 transition-colors"
+               >
+                 {exportingId === art.id ? 'Exporting…' : 'Download PPTX'}
+               </button>
+              ) : art.type === 'mind_map' ? (
                 <button
                   onClick={() => handleExport(art, 'json')}
                   disabled={exportingId === art.id || art.status !== 3}

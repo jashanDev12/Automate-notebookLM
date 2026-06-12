@@ -1,4 +1,4 @@
-import { getInteractiveHtml, getArtifactState } from './rpc';
+import { getInteractiveHtml, getArtifactState, exportArtifactToDocs } from './rpc';
 import type { Artifact, AuthSession, Flashcard, MindMapNode, QuizQuestion } from './types';
 import { createLogger } from './logger';
 
@@ -56,11 +56,13 @@ function parseStateQuestions(rawQuestions: any[]): QuizQuestion[] {
       };
     });
 
-    return {
+    const parsedQuestion: QuizQuestion = {
       question: questionText,
       answerOptions,
-      hint
     };
+    if (hint) parsedQuestion.hint = hint;
+
+    return parsedQuestion;
   }).filter((q): q is QuizQuestion => q !== null);
 }
 
@@ -92,14 +94,33 @@ export async function exportArtifact(
   session: AuthSession,
   notebookId: string,
   artifact: Artifact,
-  format: 'json' | 'markdown' | 'html',
-): Promise<{ content: string; filename: string; mimeType: string }> {
+  format: 'json' | 'markdown' | 'html' | 'pptx',
+): Promise<{ content?: string; filename?: string; mimeType?: string; url?: string }> {
   log.info('Exporting artifact', { id: artifact.id, type: artifact.type, format });
+
+  if (artifact.type === 'slide_deck' && format === 'pptx') {
+    // 1. Trigger export to Google Slides
+    const driveUrl = await exportArtifactToDocs(session, notebookId, artifact.id);
+    
+    // 2. Extract Document ID
+    const match = /\/d\/([a-zA-Z0-9-_]+)/.exec(driveUrl);
+    if (!match) {
+      throw new Error('Failed to parse Document ID from Google Drive URL');
+    }
+    const docId = match[1];
+
+    // 3. Construct native PPTX download link
+    const downloadUrl = `https://docs.google.com/presentation/d/${docId}/export/pptx`;
+    
+    return {
+      url: downloadUrl,
+    };
+  }
 
   if (artifact.type === 'mind_map') {
     const rawResult = await getInteractiveHtml(session, notebookId, artifact.id);
     // Mind Map tree is at [0][9][3]
-    const tree = rawResult?.[0]?.[9]?.[3];
+    const tree = (rawResult as any)?.raw?.[0]?.[9]?.[3] || (rawResult as any)?.html?.[0]?.[9]?.[3] || (rawResult as any)?.[0]?.[9]?.[3];
     if (!tree) {
       throw new Error('Mind map data not yet ready or missing in response');
     }

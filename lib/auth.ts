@@ -245,7 +245,7 @@ export async function connectNotebookLm(): Promise<void> {
     throw new Error('Could not open a NotebookLM tab.');
   }
 
-  const deadline = Date.now() + 60_000;
+  const deadline = Date.now() + 30_000;
   let lastError = 'NotebookLM is still loading.';
   let attempt = 0;
 
@@ -258,14 +258,16 @@ export async function connectNotebookLm(): Promise<void> {
     } catch (err) {
       lastError = err instanceof Error ? err.message : String(err);
       log.debug('connectNotebookLm waiting for session', { tabId, attempt, lastError });
-      if (lastError.includes('sign-in') || lastError.includes('Sign-in')) {
+      
+      const lower = lastError.toLowerCase();
+      if (lower.includes('sign-in') || lower.includes('servicelogin')) {
         log.error('connectNotebookLm: sign-in required', err, { tabId });
         throw new Error(
-          `${lastError}\n\nSign in on the NotebookLM tab that just opened, then click Connect again.`,
+          `Sign-in required on the NotebookLM tab.\n\nComplete sign-in in the browser window, then click Connect again.`,
         );
       }
     }
-    await delay(1000);
+    await delay(1500);
   }
 
   log.error('connectNotebookLm timed out', undefined, { tabId, attempts: attempt, lastError });

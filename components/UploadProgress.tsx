@@ -24,7 +24,7 @@ function statusColor(status: string): string {
     case 'uploading':
       return 'bg-nlm-blue animate-pulse';
     case 'uploaded':
-      return 'bg-blue-400';
+      return 'bg-blue-400 animate-pulse';
     case 'processing':
       return 'bg-amber-500 animate-pulse';
     case 'polling':
@@ -43,23 +43,23 @@ function statusLabel(
 ): string {
   switch (status) {
     case 'pending':
-      return 'waiting';
+      return 'Waiting in queue';
     case 'registering':
-      return 'registering';
+      return 'Setting up…';
     case 'uploading':
-      return `uploading ${uploadPct}%`;
+      return `Uploading (${uploadPct}%)`;
     case 'uploaded':
-      return 'uploaded';
+      return 'Successfully uploaded';
     case 'processing':
-      return detail ? `NotebookLM processing (${detail})` : 'NotebookLM processing';
+      return detail ? `Google is ${detail.toLowerCase()}` : 'Google is processing…';
     case 'polling':
-      return detail ? `checking status (${detail})` : 'checking status';
+      return 'Almost ready…';
     case 'completed':
-      return 'done';
+      return 'Ready';
     case 'failed':
-      return 'failed';
+      return 'Failed';
     default:
-      return status;
+      return status.charAt(0).toUpperCase() + status.slice(1);
   }
 }
 

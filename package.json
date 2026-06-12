@@ -1,6 +1,6 @@
 {
-  "name": "notebooklm-mega-uploader",
-  "description": "Upload large local files to Google NotebookLM in 200MB chunks",
+  "name": "learn-flow-ai",
+  "description": "Upload large local files to Google NotebookLM and export study artifacts",
   "version": "1.0.0",
   "private": true,
   "type": "module",
