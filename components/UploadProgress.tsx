@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { copyRecentLogsToClipboard } from '../lib/logger';
+import { toUserErrorMessage } from '../lib/user-errors';
 import type { UploadJob } from '../lib/types';
 
 function formatBytes(bytes: number): string {
@@ -279,7 +280,9 @@ export function UploadProgress({
                 </span>
               </div>
               {chunk.error && (
-                <p className="text-xs text-red-600 mt-0.5">{chunk.error}</p>
+                <p className="text-xs text-red-600 mt-0.5">
+                  {toUserErrorMessage(chunk.error, 'chunk')}
+                </p>
               )}
               {isSummary &&
                 chunk.status === 'failed' &&

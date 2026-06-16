@@ -4,6 +4,7 @@ import { listArtifacts } from '../lib/rpc';
 import { exportArtifact } from '../lib/artifacts';
 import { fetchAuthSession } from '../lib/auth';
 import { createLogger } from '../lib/logger';
+import { toUserErrorMessage } from '../lib/user-errors';
 
 const log = createLogger('ui-artifacts');
 
@@ -16,6 +17,7 @@ export function ArtifactList({ notebookId }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [exportingId, setExportingId] = useState<string | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
 
   const loadArtifacts = async () => {
     if (!notebookId) return;
@@ -41,6 +43,7 @@ export function ArtifactList({ notebookId }: Props) {
 
   const handleExport = async (artifact: Artifact, format: 'json' | 'markdown' | 'html' | 'pptx') => {
     setExportingId(artifact.id);
+    setExportError(null);
     try {
       const session = await fetchAuthSession();
       const { content, filename, mimeType, url } = await exportArtifact(session, notebookId, artifact, format);
@@ -62,7 +65,7 @@ export function ArtifactList({ notebookId }: Props) {
       }
     } catch (err) {
       log.error('Export failed', err);
-      alert(err instanceof Error ? err.message : String(err));
+      setExportError(toUserErrorMessage(err, 'export'));
     } finally {
       setExportingId(null);
     }
@@ -89,6 +92,12 @@ export function ArtifactList({ notebookId }: Props) {
           {loading ? 'Refreshing…' : 'Refresh'}
         </button>
       </div>
+
+      {exportError && (
+        <div className="text-xs text-red-600 bg-red-50 p-2 rounded border border-red-100">
+          {exportError}
+        </div>
+      )}
 
       {error && (
         <div className="text-xs text-red-600 bg-red-50 p-2 rounded border border-red-100">

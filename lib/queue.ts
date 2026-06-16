@@ -378,6 +378,7 @@ import {
   updateStoredJob,
 } from './chunk-store';
 import { createLogger } from './logger';
+import { toUserErrorMessage } from './user-errors';
 import {
   SourceProcessingError,
   SourceProcessingTimeoutError,
@@ -425,8 +426,7 @@ function applyChunkFailure(
     chunk.failureKind = 'processing_timeout';
     chunk.sourceId = err.sourceId;
     chunk.bytesSent = chunk.size;
-    chunk.error =
-      `${err.message} The file is already on NotebookLM — click "Resume waiting" (do not re-upload).`;
+    chunk.error = toUserErrorMessage(err, 'chunk');
     return;
   }
 
@@ -434,12 +434,12 @@ function applyChunkFailure(
     chunk.failureKind = 'processing';
     chunk.sourceId = err.sourceId;
     chunk.bytesSent = chunk.size;
-    chunk.error = err.message;
+    chunk.error = toUserErrorMessage(err, 'chunk');
     return;
   }
 
   chunk.failureKind = 'upload';
-  chunk.error = formatChunkError(err);
+  chunk.error = toUserErrorMessage(err, 'chunk');
 }
 
 /**

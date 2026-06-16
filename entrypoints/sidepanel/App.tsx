@@ -1,9 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
-import {
-  copyRecentLogsToClipboard,
-  createLogger,
-  formatError,
-} from '../../lib/logger';
+import { createLogger, formatError } from '../../lib/logger';
+import { toUserErrorMessage } from '../../lib/user-errors';
 import { FileDropZone } from '../../components/FileDropZone';
 import { NotebookSelect } from '../../components/NotebookSelect';
 import { computeUploadPercent, UploadProgress } from '../../components/UploadProgress';
@@ -11,7 +8,6 @@ import { VideoPrepDialog } from '../../components/VideoPrepDialog';
 import {
   connectNotebookLm,
   fetchAuthSession,
-  getAuthDiagnostics,
 } from '../../lib/auth';
 import { findNotebookLmTabs } from '../../lib/tab-proxy';
 import {
@@ -39,7 +35,6 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [showPrepDialog, setShowPrepDialog] = useState(false);
   const [connecting, setConnecting] = useState(false);
-  const [logCopied, setLogCopied] = useState(false);
   const [activeTab, setActiveTab] = useState<'upload' | 'artifacts'>('upload');
 
   const handleDone = useCallback(() => {
@@ -67,10 +62,8 @@ export default function App() {
         setWarning('Connected, but no notebooks found. Create one at notebooklm.google.com first.');
       }
     } catch (err) {
-      const diag = await getAuthDiagnostics().catch(() => '');
-      const msg = err instanceof Error ? err.message : String(err);
-      log.error('loadNotebooks failed', err, { diagnostics: diag });
-      setError(diag ? `${msg}\n\n${diag}` : msg);
+      log.error('loadNotebooks failed', err);
+      setError(toUserErrorMessage(err, 'auth'));
       setAuthed(false);
       setNotebooks([]);
       setNotebookId('');
@@ -89,10 +82,8 @@ export default function App() {
       }
       await loadNotebooks();
     } catch (err) {
-      const diag = await getAuthDiagnostics().catch(() => '');
-      const msg = err instanceof Error ? err.message : String(err);
-      log.error('handleConnect failed', err, { diagnostics: diag });
-      setError(diag ? `${msg}\n\n${diag}` : msg);
+      log.error('handleConnect failed', err);
+      setError(toUserErrorMessage(err, 'auth'));
       setAuthed(false);
     } finally {
       setConnecting(false);
@@ -165,9 +156,8 @@ export default function App() {
         setJob(null);
         setError(null);
       } else {
-        const msg = err instanceof Error ? err.message : String(err);
         log.error('upload failed', err, formatError(err));
-        setError(msg);
+        setError(toUserErrorMessage(err, 'upload'));
       }
     } finally {
       setBusy(false);
@@ -209,9 +199,8 @@ export default function App() {
       });
     } catch (err) {
       if ((err as Error).name !== 'AbortError') {
-        const msg = err instanceof Error ? err.message : String(err);
         log.error('retry chunk failed', err, formatError(err));
-        setError(msg);
+        setError(toUserErrorMessage(err, 'upload'));
       }
     } finally {
       setBusy(false);
@@ -280,7 +269,7 @@ export default function App() {
               <strong>Keep that tab open</strong> while you upload.
             </p>
             <p className="text-xs text-amber-800">
-              Do not click Refresh before a NotebookLM tab is open — that causes the error you saw.
+              Use Connect first — Refresh only works after a NotebookLM tab is open.
             </p>
             <div className="flex gap-2">
               <button
@@ -310,25 +299,8 @@ export default function App() {
         )}
 
         {error && (
-          <div className="rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-800 space-y-2">
-            <p className="whitespace-pre-line">{error}</p>
-            <div className="flex flex-wrap gap-2 pt-1">
-              <button
-                type="button"
-                onClick={() => {
-                  void copyRecentLogsToClipboard().then((ok) => {
-                    setLogCopied(ok);
-                    if (ok) setTimeout(() => setLogCopied(false), 2500);
-                  });
-                }}
-                className="rounded border border-red-300 px-2 py-1 text-xs text-red-900 hover:bg-red-100"
-              >
-                {logCopied ? 'Logs copied!' : 'Copy debug log'}
-              </button>
-              <span className="text-xs text-red-700 self-center">
-                Or: right-click side panel → Inspect → Console (filter: [NLM])
-              </span>
-            </div>
+          <div className="rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-800">
+            {error}
           </div>
         )}
 
