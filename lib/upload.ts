@@ -193,6 +193,7 @@ import type { AuthSession } from './types';
 export type UploadPhase =
   | 'registering'
   | 'uploading'
+  | 'finalizing'
   | 'uploaded'
   | 'processing'
   | 'polling';
@@ -313,8 +314,11 @@ export async function uploadBlobResumable(
   session: AuthSession,
   uploadUrl: string,
   blob: Blob,
-  onProgress?: (sent: number, total: number) => void,
+  callbacks?: UploadFileChunkCallbacks | ((sent: number, total: number) => void),
 ): Promise<void> {
+  const { onProgress, onPhase } =
+    typeof callbacks === 'function' ? { onProgress: callbacks } : (callbacks ?? {});
+
   onProgress?.(0, blob.size);
 
   const headers = {
@@ -330,14 +334,17 @@ export async function uploadBlobResumable(
   };
 
   if (session.tabId) {
-    const result = await tabProxyBlobUpload(session.tabId, uploadUrl, headers, blob);
-    onProgress?.(blob.size, blob.size);
+    const result = await tabProxyBlobUpload(session.tabId, uploadUrl, headers, blob, {
+      onProgress,
+      onFinalizing: () => onPhase?.('finalizing'),
+    });
     if (!result.ok) {
       throw new Error(`Upload finalize failed (${result.status}): ${result.body.slice(0, 200)}`);
     }
     return;
   }
 
+  onPhase?.('finalizing');
   const response = await fetch(uploadUrl, {
     method: 'POST',
     headers: { ...headers, Cookie: session.cookieHeader },
@@ -554,10 +561,23 @@ export async function uploadFileChunksParallel(
 
     onPartProgress?.({ partIndex, phase: 'uploading', sent: 0, total: blob.size });
 
+    let uploadPhase: UploadPhase = 'uploading';
     try {
-      await uploadBlobResumable(session, uploadUrl, blob, (sent, total) =>
-        onPartProgress?.({ partIndex, phase: 'uploading', sent, total }),
-      );
+      await uploadBlobResumable(session, uploadUrl, blob, {
+        onProgress: (sent, total) =>
+          onPartProgress?.({ partIndex, phase: uploadPhase, sent, total }),
+        onPhase: (phase) => {
+          uploadPhase = phase;
+          if (phase === 'finalizing') {
+            onPartProgress?.({
+              partIndex,
+              phase: 'finalizing',
+              sent: Math.round(blob.size * 0.9),
+              total: blob.size,
+            });
+          }
+        },
+      });
     } finally {
       releaseUploadSlot();
     }

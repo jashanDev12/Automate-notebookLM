@@ -25,7 +25,7 @@ export function extractAppData(htmlContent: string): any {
 function parseStateQuestions(rawQuestions: any[]): QuizQuestion[] {
   if (!Array.isArray(rawQuestions)) return [];
   
-  return rawQuestions.map(qBlock => {
+  return rawQuestions.map((qBlock): QuizQuestion | null => {
     // qBlock is [null, null, null, null, [[["question", [null, null, null, null, [[["type", ...], ["question", ...]]]]]]]]
     const contentBlock = qBlock?.[4]?.[0];
     const questionTuple = contentBlock?.find((t: any) => t?.[0] === 'question');
@@ -56,11 +56,14 @@ function parseStateQuestions(rawQuestions: any[]): QuizQuestion[] {
       };
     });
 
-    return {
+    const question: QuizQuestion = {
       question: questionText,
       answerOptions,
-      hint
     };
+    if (hint) {
+      question.hint = String(hint);
+    }
+    return question;
   }).filter((q): q is QuizQuestion => q !== null);
 }
 

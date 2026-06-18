@@ -43,6 +43,7 @@ export type ChunkStatus =
   | 'pending'
   | 'registering'
   | 'uploading'
+  | 'finalizing'
   | 'uploaded'
   | 'processing'
   | 'polling'

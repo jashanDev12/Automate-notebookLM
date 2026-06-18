@@ -372,6 +372,7 @@
 import { fetchAuthSession } from './auth';
 import { needsVideoPrep, prepareFileChunks, resolveMimeType } from './chunker';
 import {
+  clearAllStoredJobs,
   deleteStoredJob,
   loadStoredJob,
   saveStoredJob,
@@ -391,6 +392,7 @@ import {
   uploadFileChunksParallel,
   waitForChunkProcessing,
   type MultiPartProgress,
+  type UploadPhase,
 } from './upload';
 import { terminateFfmpeg, type VideoPrepProgress } from './video/ffmpeg';
 
@@ -505,6 +507,13 @@ export class SequentialUploadQueue {
       throw new Error('Video preparation mode required');
     }
 
+    // Clear any previous stored jobs to prevent IndexedDB space leak
+    try {
+      await clearAllStoredJobs();
+    } catch (err) {
+      log.warn('Failed to clear old stored jobs from IndexedDB', { error: formatChunkError(err) });
+    }
+
     this.cancelled = false;
     this.running = true;
     this.preparedChunks = [];
@@ -550,7 +559,7 @@ export class SequentialUploadQueue {
 
       if (this.cancelled) {
         job.status = 'cancelled';
-        job.phase = 'idle';
+        job.phase = job.chunks.length > 0 ? 'done' : 'idle';
         onProgress({ ...job });
         return job;
       }
@@ -586,11 +595,11 @@ export class SequentialUploadQueue {
       if (signal.aborted || this.cancelled) {
         log.info('Job cancelled', { jobId: job.id });
         job.status = 'cancelled';
-        job.phase = 'idle';
+        job.phase = job.chunks.length > 0 ? 'done' : 'idle';
       } else {
         log.error('Job failed', err, { jobId: job.id });
         job.status = 'failed';
-        job.phase = 'idle';
+        job.phase = job.chunks.length > 0 ? 'done' : 'idle';
       }
       onProgress({ ...job });
       throw err;
@@ -700,10 +709,10 @@ export class SequentialUploadQueue {
     } catch (err) {
       if (signal.aborted || this.cancelled) {
         job.status = 'cancelled';
-        job.phase = 'idle';
+        job.phase = job.chunks.length > 0 ? 'done' : 'idle';
       } else {
         job.status = 'failed';
-        job.phase = 'idle';
+        job.phase = job.chunks.length > 0 ? 'done' : 'idle';
       }
       onProgress({ ...job });
       throw err;
@@ -717,7 +726,11 @@ export class SequentialUploadQueue {
 
   private finishJob(job: UploadJob, onProgress: UploadProgressCallback): void {
     const failed = job.chunks.filter((c) => c.status === 'failed').length;
-    job.status = failed > 0 ? 'failed' : 'completed';
+    job.status = this.cancelled
+      ? 'cancelled'
+      : failed > 0
+        ? 'failed'
+        : 'completed';
     job.phase = 'done';
     job.retryingChunkIndex = undefined;
     onProgress({ ...job, chunks: [...job.chunks] });
@@ -762,7 +775,7 @@ export class SequentialUploadQueue {
       const chunk = job.chunks[jobIndex];
       chunk.status = p.phase;
       chunk.statusDetail = p.detail;
-      if (p.phase === 'uploading') {
+      if (p.phase === 'uploading' || p.phase === 'finalizing') {
         chunk.bytesSent = p.sent;
       } else if (p.phase !== 'registering') {
         chunk.bytesSent = p.total;
@@ -877,7 +890,7 @@ export class SequentialUploadQueue {
       onPhase: (phase: MultiPartProgress['phase'], detail?: string) => {
         job.chunks[index].status = phase;
         job.chunks[index].statusDetail = detail;
-        if (phase === 'uploading') {
+        if (phase === 'uploading' || phase === 'finalizing') {
           // bytesSent updated via onProgress
         } else if (phase !== 'registering') {
           job.chunks[index].bytesSent = chunk.size;
@@ -1083,10 +1096,23 @@ async function uploadFileChunksParallelSettled(
           options?.signal?.throwIfAborted();
           onPartProgress?.({ partIndex, phase: 'uploading', sent: 0, total: chunk.blob.size });
 
+          let uploadPhase: UploadPhase = 'uploading';
           try {
-            await uploadBlobResumable(session, uploadUrl, chunk.blob, (sent, total) =>
-              onPartProgress?.({ partIndex, phase: 'uploading', sent, total }),
-            );
+            await uploadBlobResumable(session, uploadUrl, chunk.blob, {
+              onProgress: (sent, total) =>
+                onPartProgress?.({ partIndex, phase: uploadPhase, sent, total }),
+              onPhase: (phase) => {
+                uploadPhase = phase;
+                if (phase === 'finalizing') {
+                  onPartProgress?.({
+                    partIndex,
+                    phase: 'finalizing',
+                    sent: Math.round(chunk.blob.size * 0.9),
+                    total: chunk.blob.size,
+                  });
+                }
+              },
+            });
           } finally {
             release();
           }

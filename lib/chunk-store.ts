@@ -71,6 +71,7 @@ export function normalizeStoredJob(job: UploadJob): UploadJob {
       (chunk.status === 'pending' ||
         chunk.status === 'registering' ||
         chunk.status === 'uploading' ||
+        chunk.status === 'finalizing' ||
         chunk.status === 'uploaded' ||
         chunk.status === 'processing' ||
         chunk.status === 'polling')
@@ -203,6 +204,30 @@ export async function getLatestStoredJob(): Promise<{ job: UploadJob; chunks: Fi
 
   const latest = all.sort((a, b) => b.updatedAt - a.updatedAt)[0];
   return loadStoredJob(latest.id);
+}
+
+export async function clearAllStoredJobs(exceptJobId?: string): Promise<void> {
+  const db = await openDb();
+  const tx = db.transaction([META_STORE, CHUNK_STORE], 'readwrite');
+  const metaStore = tx.objectStore(META_STORE);
+  const chunkStore = tx.objectStore(CHUNK_STORE);
+
+  const allMetas = await idbRequest<StoredJobRecord[]>(metaStore.getAll());
+  for (const meta of allMetas) {
+    if (meta.id === exceptJobId) continue;
+    metaStore.delete(meta.id);
+
+    const index = chunkStore.index('byJobId');
+    const rows = await idbRequest<StoredChunkRecord[]>(index.getAll(meta.id));
+    for (const row of rows) {
+      chunkStore.delete([row.jobId, row.index]);
+    }
+    log.info('Cleared old stored job from IndexedDB', { jobId: meta.id, parts: rows.length });
+  }
+
+  await idbTxDone(tx);
+  db.close();
+  log.info('All old stored jobs cleared');
 }
 
 export async function deleteStoredJob(jobId: string): Promise<void> {

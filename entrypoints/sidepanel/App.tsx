@@ -146,10 +146,15 @@ export default function App() {
         { videoPrepMode },
       );
     } catch (err) {
-      if ((err as Error).name === 'AbortError') {
+      const isAbort = (err as Error).name === 'AbortError' || (err as Error).message?.includes('aborted');
+      if (isAbort) {
         log.info('upload cancelled');
-        setJob(null);
-        setError(null);
+        if (uploadQueue.hasPreparedChunks) {
+          setError(null);
+        } else {
+          setJob(null);
+          setError(null);
+        }
       } else {
         log.error('upload failed', err, formatError(err));
         setError(toUserErrorMessage(err, 'upload'));
@@ -206,11 +211,13 @@ export default function App() {
     log.info('Cancel clicked');
     uploadQueue.cancel();
     setShowPrepDialog(false);
-    setJob((prev) =>
-      prev
-        ? { ...prev, status: 'cancelled', phase: 'idle', prepProgress: undefined }
-        : null,
-    );
+    setJob((prev) => {
+      if (!prev) return null;
+      if (prev.chunks.length === 0) {
+        return null;
+      }
+      return { ...prev, status: 'cancelled', phase: 'done', prepProgress: undefined };
+    });
     setBusy(false);
     setError(null);
   };

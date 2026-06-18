@@ -5,6 +5,14 @@ const log = createLogger('tab-proxy');
 /** Transfer large blobs to the NotebookLM tab in 8 MB pieces (Chrome message size limits). */
 const TRANSFER_CHUNK_BYTES = 8 * 1024 * 1024;
 
+/** Chunk transfer to the tab is most of the work; finalize POSTs the full blob to Google. */
+const CHUNK_PROGRESS_RATIO = 0.9;
+
+export interface TabProxyBlobUploadCallbacks {
+  onProgress?: (sent: number, total: number) => void;
+  onFinalizing?: () => void;
+}
+
 export const NOTEBOOKLM_TAB_URLS = [
   'https://notebooklm.google.com/*',
   'https://notebooklm.google.com/',
@@ -228,12 +236,24 @@ export interface TabUploadResult extends TabResponse {
   body: string;
 }
 
+function reportTransferProgress(
+  end: number,
+  total: number,
+  onProgress?: (sent: number, total: number) => void,
+): void {
+  onProgress?.(Math.round(end * CHUNK_PROGRESS_RATIO), total);
+}
+
 export async function tabProxyBlobUpload(
   tabId: number,
   url: string,
   headers: Record<string, string>,
   blob: Blob,
+  callbacks?: TabProxyBlobUploadCallbacks,
 ): Promise<TabUploadResult> {
+  const onProgress = callbacks?.onProgress;
+  const onFinalizing = callbacks?.onFinalizing;
+
   const uploadId = crypto.randomUUID();
   log.info('tabProxyBlobUpload start', {
     tabId,
@@ -243,6 +263,8 @@ export async function tabProxyBlobUpload(
   });
   await sendToTab(tabId, { type: 'NLM_UPLOAD_INIT', uploadId });
 
+  onProgress?.(0, blob.size);
+
   const bytes = new Uint8Array(await blob.arrayBuffer());
   for (let offset = 0; offset < bytes.length; offset += TRANSFER_CHUNK_BYTES) {
     const end = Math.min(offset + TRANSFER_CHUNK_BYTES, bytes.length);
@@ -251,7 +273,11 @@ export async function tabProxyBlobUpload(
       uploadId,
       data: Array.from(bytes.subarray(offset, end)),
     });
+    reportTransferProgress(end, bytes.length, onProgress);
   }
+
+  onFinalizing?.();
+  onProgress?.(Math.round(bytes.length * CHUNK_PROGRESS_RATIO), bytes.length);
 
   const result = await sendToTab<TabUploadResult>(tabId, {
     type: 'NLM_UPLOAD_FINALIZE',
@@ -260,6 +286,8 @@ export async function tabProxyBlobUpload(
     method: 'POST',
     headers,
   });
+  onProgress?.(bytes.length, bytes.length);
+
   log.info('tabProxyBlobUpload done', {
     tabId,
     uploadId,

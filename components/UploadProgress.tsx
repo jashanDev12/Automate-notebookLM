@@ -24,6 +24,8 @@ function statusColor(status: string): string {
       return 'bg-sky-400 animate-pulse';
     case 'uploading':
       return 'bg-nlm-blue animate-pulse';
+    case 'finalizing':
+      return 'bg-indigo-500 animate-pulse';
     case 'uploaded':
       return 'bg-blue-400';
     case 'processing':
@@ -49,12 +51,14 @@ function statusLabel(
       return 'registering';
     case 'uploading':
       return `uploading ${uploadPct}%`;
+    case 'finalizing':
+      return 'finalizing upload';
     case 'uploaded':
       return 'uploaded';
     case 'processing':
-      return detail ? `NotebookLM processing (${detail})` : 'NotebookLM processing';
+      return 'NotebookLM processing';
     case 'polling':
-      return detail ? `checking status (${detail})` : 'checking status';
+      return 'checking status';
     case 'completed':
       return 'done';
     case 'failed':
@@ -67,6 +71,7 @@ function statusLabel(
 function progressBarWidth(status: string, uploadPct: number): string {
   if (status === 'completed') return '100%';
   if (status === 'uploading') return `${uploadPct}%`;
+  if (status === 'finalizing') return `${uploadPct}%`;
   if (
     status === 'uploaded' ||
     status === 'processing' ||
@@ -181,9 +186,11 @@ export function UploadProgress({
             ? 'border-nlm-border bg-white'
             : allSucceeded
               ? 'border-green-200 bg-green-50'
-              : partialSuccess
+              : job.status === 'cancelled'
                 ? 'border-amber-200 bg-amber-50'
-                : 'border-red-200 bg-red-50'
+                : partialSuccess
+                  ? 'border-amber-200 bg-amber-50'
+                  : 'border-red-200 bg-red-50'
           : 'border-nlm-border bg-white'
       }`}
     >
@@ -194,9 +201,11 @@ export function UploadProgress({
               ? `Retrying part ${retryingPart} of ${total}…`
               : allSucceeded
                 ? 'Upload complete'
-                : partialSuccess
-                  ? 'Partially uploaded'
-                  : 'Upload failed'}
+                : job.status === 'cancelled'
+                  ? 'Upload cancelled'
+                  : partialSuccess
+                    ? 'Partially uploaded'
+                    : 'Upload failed'}
           </p>
           <p className="text-sm text-gray-700">
             {isRetrying
@@ -205,9 +214,11 @@ export function UploadProgress({
                 ? notebookTitle
                   ? `All ${total} part(s) are ready in "${notebookTitle}".`
                   : `All ${total} part(s) processed successfully by NotebookLM.`
-                : partialSuccess
-                  ? `${completed} of ${total} part(s) ready${notebookTitle ? ` in "${notebookTitle}"` : ''}.`
-                  : `No parts were processed successfully.`}
+                : job.status === 'cancelled'
+                  ? 'Upload cancelled by user.'
+                  : partialSuccess
+                    ? `${completed} of ${total} part(s) ready${notebookTitle ? ` in "${notebookTitle}"` : ''}.`
+                    : `No parts were processed successfully.`}
           </p>
           {!isRetrying && partialSuccess && (
             <p className="text-xs text-amber-800">
