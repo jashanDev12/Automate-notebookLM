@@ -13,7 +13,7 @@ type ContentMessage =
       bodyText?: string;
     }
   | { type: 'NLM_UPLOAD_INIT'; uploadId: string }
-  | { type: 'NLM_UPLOAD_CHUNK'; uploadId: string; data: number[] }
+  | { type: 'NLM_UPLOAD_CHUNK'; uploadId: string; dataB64: string }
   | {
       type: 'NLM_UPLOAD_FINALIZE';
       uploadId: string;
@@ -117,7 +117,10 @@ async function handleMessage(message: ContentMessage): Promise<unknown> {
     case 'NLM_UPLOAD_CHUNK': {
       const parts = uploadBuffers.get(message.uploadId);
       if (!parts) throw new Error('Upload session expired — try again.');
-      parts.push(new Uint8Array(message.data));
+      // Decode via fetch('data:...') — native C++ base64 decode, faster than
+      // a charCodeAt loop and avoids the ~64 MB IPC cost of a number[] payload.
+      const res = await fetch(`data:application/octet-stream;base64,${message.dataB64}`);
+      parts.push(new Uint8Array(await res.arrayBuffer()));
       return { ok: true };
     }
 

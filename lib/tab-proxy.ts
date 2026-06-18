@@ -2,8 +2,33 @@ import { createLogger, previewText } from './logger';
 
 const log = createLogger('tab-proxy');
 
-/** Transfer large blobs to the NotebookLM tab in 8 MB pieces (Chrome message size limits). */
+/** Transfer large blobs to the NotebookLM tab in 8 MB pieces. */
 const TRANSFER_CHUNK_BYTES = 8 * 1024 * 1024;
+
+/**
+ * Encode a Uint8Array slice as a base64 string.
+ *
+ * Why base64 strings instead of number[]:
+ *  - Array.from(8 MB) creates 8 M JS numbers; each tagged integer costs ~8 bytes
+ *    in Chrome's IPC serialisation → ~64 MB on the wire per chunk (right at the limit).
+ *  - A base64 string of the same 8 MB is only ~10.7 MB of chars → ~21 MB UTF-16 on wire.
+ *  - btoa + String.fromCharCode.apply run in native C++, far faster than an 8 M-iteration
+ *    JS loop.
+ *
+ * 64 KB sub-blocks prevent call-stack overflow from apply().
+ */
+function encodeChunkBase64(bytes: Uint8Array, offset: number, end: number): string {
+  const BLOCK = 65536;
+  let binary = '';
+  for (let i = offset; i < end; i += BLOCK) {
+    binary += String.fromCharCode.apply(
+      null,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      bytes.subarray(i, Math.min(i + BLOCK, end)) as any,
+    );
+  }
+  return btoa(binary);
+}
 
 /** Chunk transfer to the tab is most of the work; finalize POSTs the full blob to Google. */
 const CHUNK_PROGRESS_RATIO = 0.9;
@@ -271,7 +296,7 @@ export async function tabProxyBlobUpload(
     await sendToTab(tabId, {
       type: 'NLM_UPLOAD_CHUNK',
       uploadId,
-      data: Array.from(bytes.subarray(offset, end)),
+      dataB64: encodeChunkBase64(bytes, offset, end),
     });
     reportTransferProgress(end, bytes.length, onProgress);
   }
