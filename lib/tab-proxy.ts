@@ -249,7 +249,7 @@ export async function tabProxyBlobUpload(
     await sendToTab(tabId, {
       type: 'NLM_UPLOAD_CHUNK',
       uploadId,
-      data: Array.from(bytes.subarray(offset, end)),
+      data: bytes.subarray(offset, end),
     });
   }
 

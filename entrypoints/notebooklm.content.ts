@@ -13,7 +13,7 @@ type ContentMessage =
       bodyText?: string;
     }
   | { type: 'NLM_UPLOAD_INIT'; uploadId: string }
-  | { type: 'NLM_UPLOAD_CHUNK'; uploadId: string; data: number[] }
+  | { type: 'NLM_UPLOAD_CHUNK'; uploadId: string; data: number[] | Uint8Array }
   | {
       type: 'NLM_UPLOAD_FINALIZE';
       uploadId: string;
