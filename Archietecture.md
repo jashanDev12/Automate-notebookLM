@@ -117,6 +117,8 @@ Chrome Manifest V3 restricts background pages from accessing cookies. We solve t
 - **Credential Safety:** We do not store your password. We only use the active session "tokens" (`SNlM0e`) already present in your browser.
 - **Local Logs:** Debug logs are stored in a local ring-buffer and are never sent to a server.
 
+Full details: [SECURITY.md](SECURITY.md) (pillars, threat model, Q&A, known limitations).
+
 ---
 
 ## 6. Critical Pitfalls (Developer Notes)

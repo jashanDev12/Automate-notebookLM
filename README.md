@@ -4,6 +4,8 @@ A Manifest V3 Chrome extension built with [WXT](https://wxt.dev), React 18, and 
 
 **Privacy:** All processing happens locally in your browser. The only network traffic goes to official `notebooklm.google.com` endpoints.
 
+**Security:** See [SECURITY.md](SECURITY.md) for the full security model, threat model, and common Q&A.
+
 **Configuration:** No `.env` file or API keys required. Authentication uses your existing Google session in Chrome.
 
 ## Features
@@ -13,7 +15,9 @@ A Manifest V3 Chrome extension built with [WXT](https://wxt.dev), React 18, and 
 - **Video prep** — FFmpeg.wasm compresses or time-splits oversized videos into valid MP4 parts
 - **Sequential queue** — One chunk uploads at a time; Part 2 starts only after Part 1 succeeds
 - **Resumable upload** — Google's Scotty resumable-upload handshake (modeled on [notebooklm-py](../notebooklm-py))
-- **RPC client** — TypeScript `batchexecute` client for `list_notebooks` and `add_source_file`
+- **RPC client** — TypeScript `batchexecute` client for notebooks, file upload, and URL/text sources
+- **Import web pages** — Add the current tab (or any URL) as a NotebookLM source via side panel or right-click context menu
+- **Scrape page text** — Import visible page content for paywalled or JS-heavy sites (optional; formatting is lost)
 
 ## Prerequisites
 
@@ -145,7 +149,20 @@ notebooklm-mega-uploader/
 | `storage` | Persist UI preferences |
 | `sidePanel` | Side panel UI |
 | `tabs` | Open notebooklm.google.com for sign-in |
+| `contextMenus` | Right-click **Import to NotebookLM** on pages and links |
+| `activeTab` | Read visible page text when you click Import page text |
 | `host_permissions` | `notebooklm.google.com` and `*.google.com` API/upload endpoints |
+
+See [SECURITY.md](SECURITY.md) for rationale, trade-offs, and threat model.
+
+## Import a web page
+
+1. Connect to NotebookLM and select a target notebook.
+2. Open the **Import Page** tab in the side panel, or right-click a page/link and choose **Import to NotebookLM**.
+3. **Import URL** — sends the link to Google (same as pasting in NotebookLM). Works for public pages and YouTube.
+4. **Import page text** — scrapes visible text from the active tab (useful when URL import fails on paywalled content).
+
+Limitations: browser-internal pages (`chrome://`, etc.) and localhost are blocked. URL import depends on Google fetching the page server-side.
 
 ## Troubleshooting
 
