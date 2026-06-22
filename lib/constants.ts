@@ -20,12 +20,16 @@ export const MAX_SOURCE_BYTES = 2 * 1024 * 1024 * 1024;
 export const RPC_METHODS = {
   LIST_NOTEBOOKS: 'wXbhsf',
   GET_NOTEBOOK: 'rLM1Ne',
+  ADD_SOURCE: 'izAoDd',
   ADD_SOURCE_FILE: 'o4cbdc',
   UPDATE_SOURCE: 'b7Wfje',
   LIST_ARTIFACTS: 'gArtLc',
   GET_INTERACTIVE_HTML: 'v9rmvd',
   GET_ARTIFACT_STATE: 'ulBSjf',
 } as const;
+
+/** Max characters for scraped text sources sent to NotebookLM. */
+export const MAX_TEXT_SOURCE_CHARS = 500_000;
 
 /** Minimum wait for NotebookLM to finish processing an uploaded source. */
 export const SOURCE_PROCESSING_TIMEOUT_MS = 600_000;

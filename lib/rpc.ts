@@ -1,5 +1,5 @@
 import { BATCHEXECUTE_URL, RPC_METHODS } from './constants';
-import { decodeResponse, extractSourceId, RpcError } from './decoder';
+import { decodeResponse, extractAddSourceId, extractSourceId, RpcError } from './decoder';
 import { createLogger, previewText, sessionLogContext } from './logger';
 import { readTabSession } from './tab-session';
 import { tabProxyFetch } from './tab-proxy';
@@ -52,6 +52,7 @@ export async function rpcCall(
   rpcId: string,
   params: unknown[],
   sourcePath = '/',
+  options: { allowNull?: boolean } = {},
 ): Promise<unknown> {
   const started = performance.now();
   const liveSession = await withFreshTabSession(session);
@@ -107,7 +108,7 @@ export async function rpcCall(
       throw new RpcError(`HTTP ${status} calling ${rpcId}`, rpcId);
     }
 
-    const decoded = decodeResponse(text, rpcId);
+    const decoded = decodeResponse(text, rpcId, { allowNull: options.allowNull });
     log.info(`RPC ${rpcId} ← ok`, {
       rpcId,
       ms: Math.round(performance.now() - started),
@@ -180,6 +181,141 @@ export async function registerFileSource(
   }
 
   log.info('Source registered', { filename, sourceId, notebookId });
+  return sourceId;
+}
+
+function requireSourceId(result: unknown, label: string): string {
+  const sourceId = extractAddSourceId(result) ?? extractSourceId(result);
+  if (!sourceId) {
+    log.error(`ADD_SOURCE: could not extract source ID`, undefined, {
+      label,
+      resultPreview: previewText(JSON.stringify(unwrapForLog(result))),
+    });
+    throw new RpcError(`Failed to extract source ID for ${label}`, RPC_METHODS.ADD_SOURCE);
+  }
+  return sourceId;
+}
+
+function unwrapForLog(value: unknown): unknown {
+  if (typeof value === 'string') {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return value.slice(0, 200);
+    }
+  }
+  return value;
+}
+
+function buildUrlSourceParams(
+  url: string,
+  notebookId: string,
+  options: { youtube?: boolean; title?: string },
+): unknown[] {
+  const { youtube = false, title } = options;
+
+  if (youtube) {
+    return [
+      [[[null, null, null, null, null, null, null, [url], null, null, 1]]],
+      notebookId,
+      [2],
+      [1, null, null, null, null, null, null, null, null, null, [1]],
+    ];
+  }
+
+  // Golden fixture / UI shape: [[[url]], title], notebookId, [2]
+  if (title) {
+    return [
+      [
+        [[url]],
+        title,
+      ],
+      notebookId,
+      [2],
+    ];
+  }
+
+  // notebooklm-py / VCR payload with null slots
+  return [
+    [[[null, null, [url], null, null, null, null, null]]],
+    notebookId,
+    [2],
+    null,
+    null,
+  ];
+}
+
+/** Register a URL source; response may be null while NotebookLM creates the source asynchronously. */
+export async function registerUrlSource(
+  session: AuthSession,
+  notebookId: string,
+  url: string,
+  options: { youtube?: boolean; title?: string } = {},
+): Promise<unknown> {
+  const params = buildUrlSourceParams(url, notebookId, options);
+  return rpcCall(
+    session,
+    RPC_METHODS.ADD_SOURCE,
+    params,
+    `/notebook/${notebookId}`,
+    { allowNull: true },
+  );
+}
+
+/** Register a text source; response may be null while NotebookLM creates the source asynchronously. */
+export async function registerTextSource(
+  session: AuthSession,
+  notebookId: string,
+  title: string,
+  content: string,
+): Promise<unknown> {
+  const params = [
+    [[[null, [title, content], null, null, null, null, null, null]]],
+    notebookId,
+    [2],
+    null,
+    null,
+  ];
+  return rpcCall(
+    session,
+    RPC_METHODS.ADD_SOURCE,
+    params,
+    `/notebook/${notebookId}`,
+    { allowNull: true },
+  );
+}
+
+/** Add a web page URL as a NotebookLM source (Google fetches content server-side). */
+export async function addUrlSource(
+  session: AuthSession,
+  notebookId: string,
+  url: string,
+  options: { youtube?: boolean; title?: string } = {},
+): Promise<string> {
+  const result = await registerUrlSource(session, notebookId, url, options);
+
+  const sourceId = requireSourceId(result, url);
+  log.info('URL source registered', {
+    url: url.slice(0, 80),
+    sourceId,
+    notebookId,
+    youtube: options.youtube,
+    hasTitle: Boolean(options.title),
+  });
+  return sourceId;
+}
+
+/** Add a plain-text source (e.g. scraped page content). */
+export async function addTextSource(
+  session: AuthSession,
+  notebookId: string,
+  title: string,
+  content: string,
+): Promise<string> {
+  const result = await registerTextSource(session, notebookId, title, content);
+
+  const sourceId = requireSourceId(result, title);
+  log.info('Text source registered', { title, sourceId, notebookId, contentLen: content.length });
   return sourceId;
 }
 

@@ -3,7 +3,7 @@ import {
   SourceProcessingTimeoutError,
 } from './source-status';
 
-export type UserErrorContext = 'auth' | 'upload' | 'chunk' | 'export' | 'general';
+export type UserErrorContext = 'auth' | 'upload' | 'chunk' | 'export' | 'import' | 'general';
 
 function rawMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
@@ -20,6 +20,8 @@ function defaultMessage(context: UserErrorContext): string {
       return 'This part failed. Try again, or click "Resume waiting" if the upload already finished.';
     case 'export':
       return 'Export failed. Make sure the artifact is ready and try again.';
+    case 'import':
+      return 'Import failed. Keep the NotebookLM tab open and try again.';
     default:
       return 'Something went wrong. Try again.';
   }
@@ -111,6 +113,26 @@ const PATTERNS: Array<{ test: (msg: string) => boolean; message: string }> = [
   {
     test: (m) => /no notebooks found/i.test(m),
     message: 'No notebooks found. Create one at notebooklm.google.com first.',
+  },
+  {
+    test: (m) => /Only http|Browser-internal|Local or private|Switch to the page/i.test(m),
+    message: 'This page cannot be imported. Use a public http:// or https:// link.',
+  },
+  {
+    test: (m) => /Could not read text from this page/i.test(m),
+    message: 'Could not read text from this page. Try Import URL instead.',
+  },
+  {
+    test: (m) => /No text content found/i.test(m),
+    message: 'No readable text on this page. Try Import URL or pick another page.',
+  },
+  {
+    test: (m) => /Cannot access contents of the page|Extension manifest must request permission/i.test(m),
+    message: 'Cannot read this tab. Click the extension icon on the page first, then try Import page text.',
+  },
+  {
+    test: (m) => /Source rejected|Failed to extract source ID/i.test(m),
+    message: 'NotebookLM rejected this source. The page may be blocked or unsupported.',
   },
 ];
 

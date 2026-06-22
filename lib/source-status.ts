@@ -94,6 +94,147 @@ function parseSourceRow(raw: unknown): NotebookSource | null {
   return { id, title, status, typeCode };
 }
 
+function extractUrlFromSourceRow(raw: unknown[]): string | null {
+  const meta = raw[2];
+  if (!Array.isArray(meta)) return null;
+  if (Array.isArray(meta[7]) && typeof meta[7][0] === 'string') return meta[7][0];
+  if (Array.isArray(meta[5]) && typeof meta[5][0] === 'string') return meta[5][0];
+  if (typeof meta[0] === 'string' && meta[0].startsWith('http')) return meta[0];
+  return null;
+}
+
+function normalizeImportUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    parsed.hash = '';
+    const normalized = parsed.href;
+    return normalized.endsWith('/') && parsed.pathname !== '/'
+      ? normalized.slice(0, -1)
+      : normalized;
+  } catch {
+    return url;
+  }
+}
+
+function stripWww(hostname: string): string {
+  return hostname.replace(/^www\./i, '');
+}
+
+function urlsRoughlyMatch(a: string, b: string): boolean {
+  const na = normalizeImportUrl(a);
+  const nb = normalizeImportUrl(b);
+  if (na === nb) return true;
+  try {
+    const ua = new URL(na);
+    const ub = new URL(nb);
+    if (stripWww(ua.hostname) !== stripWww(ub.hostname)) return false;
+    const pathA = ua.pathname.replace(/\/$/, '') || '/';
+    const pathB = ub.pathname.replace(/\/$/, '') || '/';
+    return pathA === pathB && ua.protocol === ub.protocol;
+  } catch {
+    return false;
+  }
+}
+
+function titlesRoughlyMatch(a: string, b: string): boolean {
+  const na = a.trim().toLowerCase();
+  const nb = b.trim().toLowerCase();
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  const prefixLen = Math.min(na.length, nb.length, 48);
+  return na.slice(0, prefixLen) === nb.slice(0, prefixLen);
+}
+
+function collectUrlsFromMetadata(meta: unknown): string[] {
+  const urls: string[] = [];
+  function walk(node: unknown, depth = 0): void {
+    if (depth > 10 || node == null) return;
+    if (typeof node === 'string' && node.startsWith('http')) {
+      urls.push(node);
+      return;
+    }
+    if (Array.isArray(node)) {
+      for (const item of node) walk(item, depth + 1);
+    }
+  }
+  walk(meta);
+  return urls;
+}
+
+export async function findSourceIdByUrl(
+  session: AuthSession,
+  notebookId: string,
+  url: string,
+  title?: string,
+): Promise<string | null> {
+  const target = normalizeImportUrl(url);
+  const params = [notebookId, null, [2], null, 0];
+  const result = await rpcCall(
+    session,
+    RPC_METHODS.GET_NOTEBOOK,
+    params,
+    `/notebook/${notebookId}`,
+  );
+  const sourcesList = extractSourcesList(result);
+  for (const row of sourcesList) {
+    if (!Array.isArray(row)) continue;
+
+    const rowUrl = extractUrlFromSourceRow(row);
+    const candidateUrls = rowUrl
+      ? [rowUrl, ...collectUrlsFromMetadata(row[2])]
+      : collectUrlsFromMetadata(row[2]);
+    if (candidateUrls.some((candidate) => urlsRoughlyMatch(candidate, target))) {
+      const id = extractIdFromRow(row);
+      if (id) return id;
+    }
+
+    if (title && typeof row[1] === 'string' && titlesRoughlyMatch(title, row[1])) {
+      const id = extractIdFromRow(row);
+      if (id) return id;
+    }
+  }
+  return null;
+}
+
+export interface WaitForSourceByUrlOptions {
+  title?: string;
+  timeoutMs?: number;
+  intervalMs?: number;
+  signal?: AbortSignal;
+}
+
+/** Poll GET_NOTEBOOK until a newly added URL (or title) source appears. */
+export async function waitForSourceIdByUrl(
+  session: AuthSession,
+  notebookId: string,
+  url: string,
+  options: WaitForSourceByUrlOptions = {},
+): Promise<string> {
+  const timeoutMs = options.timeoutMs ?? 90_000;
+  const intervalMs = options.intervalMs ?? 2_000;
+  const deadline = Date.now() + timeoutMs;
+  let attempt = 0;
+
+  while (Date.now() < deadline) {
+    attempt++;
+    const sourceId = await findSourceIdByUrl(session, notebookId, url, options.title);
+    if (sourceId) {
+      log.info('Source located after ADD_SOURCE poll', {
+        attempt,
+        sourceId,
+        url: url.slice(0, 80),
+      });
+      return sourceId;
+    }
+    await sleep(intervalMs, options.signal);
+  }
+
+  throw new RpcError(
+    `Source did not appear in notebook within ${Math.round(timeoutMs / 1000)}s`,
+    RPC_METHODS.ADD_SOURCE,
+  );
+}
+
 function extractSourcesList(notebook: unknown): unknown[] {
   if (!Array.isArray(notebook) || notebook.length === 0) {
     throw new RpcError('Empty notebook response when listing sources', RPC_METHODS.GET_NOTEBOOK);

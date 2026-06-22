@@ -20,6 +20,7 @@ import { getLatestStoredJob } from '../../lib/chunk-store';
 import { uploadQueue } from '../../lib/queue';
 import type { Notebook, UploadJob, VideoPrepMode } from '../../lib/types';
 import { ArtifactList } from '../../components/ArtifactList';
+import { ImportPage } from '../../components/ImportPage';
 
 const log = createLogger('ui');
 
@@ -35,7 +36,7 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [showPrepDialog, setShowPrepDialog] = useState(false);
   const [connecting, setConnecting] = useState(false);
-  const [activeTab, setActiveTab] = useState<'upload' | 'artifacts'>('upload');
+  const [activeTab, setActiveTab] = useState<'upload' | 'import' | 'artifacts'>('upload');
 
   const handleDone = useCallback(() => {
     const jobId = job?.id;
@@ -102,6 +103,16 @@ export default function App() {
         phase: stored.job.phase,
       });
     });
+  }, []);
+
+  useEffect(() => {
+    const onMessage = (message: { type?: string }) => {
+      if (message.type === 'PENDING_PAGE_IMPORT') {
+        setActiveTab('import');
+      }
+    };
+    chrome.runtime.onMessage.addListener(onMessage);
+    return () => chrome.runtime.onMessage.removeListener(onMessage);
   }, []);
 
   useEffect(() => {
@@ -249,6 +260,14 @@ export default function App() {
           Upload
         </button>
         <button
+          onClick={() => setActiveTab('import')}
+          className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+            activeTab === 'import' ? 'border-nlm-blue text-nlm-blue' : 'border-transparent text-gray-500 hover:text-gray-700'
+          }`}
+        >
+          Import Page
+        </button>
+        <button
           onClick={() => setActiveTab('artifacts')}
           className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
             activeTab === 'artifacts' ? 'border-nlm-blue text-nlm-blue' : 'border-transparent text-gray-500 hover:text-gray-700'
@@ -394,6 +413,12 @@ export default function App() {
               onCancel={handleCancel}
             />
           </div>
+        ) : activeTab === 'import' ? (
+          <ImportPage
+            notebookId={notebookId}
+            authed={authed === true}
+            disabled={busy || uploadQueue.isRunning}
+          />
         ) : (
           <div className="pt-2">
             <ArtifactList notebookId={notebookId} />

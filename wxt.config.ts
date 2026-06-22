@@ -26,8 +26,8 @@ export default defineConfig({
   manifest: {
     name: 'NotebookLM Mega Uploader',
     description:
-      'Upload large PDF, text, video, and Markdown files to NotebookLM. Local compress/split for video over 200MB.',
-    permissions: ['cookies', 'storage', 'sidePanel', 'tabs', 'scripting'],
+      'Upload large PDF, text, video, and Markdown files to NotebookLM. Import web pages as sources. Local compress/split for video over 200MB.',
+    permissions: ['cookies', 'storage', 'sidePanel', 'tabs', 'scripting', 'contextMenus', 'activeTab'],
     host_permissions: [
       'https://notebooklm.google.com/*',
       'https://*.google.com/*',

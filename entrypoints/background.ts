@@ -1,4 +1,7 @@
 import { ensureTabBridge, isNotebookLmUrl } from '../lib/tab-proxy';
+import { setPendingPageImport } from '../lib/import-session';
+
+const IMPORT_MENU_ID = 'nlm-import-page';
 
 export default defineBackground(() => {
   void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
@@ -21,12 +24,53 @@ export default defineBackground(() => {
     });
   };
 
+  const registerContextMenus = () => {
+    void chrome.contextMenus.removeAll(() => {
+      chrome.contextMenus.create({
+        id: IMPORT_MENU_ID,
+        title: 'Import to NotebookLM',
+        contexts: ['page', 'link'],
+      });
+    });
+  };
+
   chrome.runtime.onInstalled.addListener(() => {
+    registerContextMenus();
     void chrome.tabs.query({}).then((tabs) => {
       for (const tab of tabs) {
         if (tab.id && isNotebookLmUrl(tab.url)) onNotebookLmTabReady(tab.id);
       }
     });
+  });
+
+  chrome.runtime.onStartup.addListener(() => {
+    registerContextMenus();
+  });
+
+  chrome.contextMenus.onClicked.addListener((info, tab) => {
+    if (info.menuItemId !== IMPORT_MENU_ID || !tab?.id) return;
+
+    const url = info.linkUrl || info.pageUrl;
+    if (!url) return;
+    if (isNotebookLmUrl(url)) return;
+
+    void (async () => {
+      await setPendingPageImport({
+        url,
+        title: tab.title,
+        tabId: tab.id,
+      });
+
+      if (tab.windowId !== undefined) {
+        await chrome.sidePanel.open({ windowId: tab.windowId }).catch(() => {
+          // side panel may already be open
+        });
+      }
+
+      void chrome.runtime.sendMessage({ type: 'PENDING_PAGE_IMPORT' }).catch(() => {
+        // side panel may be closed
+      });
+    })();
   });
 
   chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
