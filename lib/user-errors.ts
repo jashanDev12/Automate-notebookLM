@@ -131,6 +131,15 @@ const PATTERNS: Array<{ test: (msg: string) => boolean; message: string }> = [
     message: 'Cannot read this tab. Click the extension icon on the page first, then try Import page text.',
   },
   {
+    test: (m) => /Source did not appear in notebook/i.test(m),
+    message:
+      'NotebookLM accepted the import but the source is taking too long to appear. Check the notebook in NotebookLM, then try again.',
+  },
+  {
+    test: (m) => /returned null with status 3|INVALID_ARGUMENT|parameter mismatch/i.test(m),
+    message: 'NotebookLM rejected this import request. Reload the extension and try again.',
+  },
+  {
     test: (m) => /Source rejected|Failed to extract source ID/i.test(m),
     message: 'NotebookLM rejected this source. The page may be blocked or unsupported.',
   },
