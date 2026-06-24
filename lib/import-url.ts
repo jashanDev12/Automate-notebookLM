@@ -2,7 +2,7 @@ import { fetchAuthSession } from './auth';
 import { extractAddSourceId, extractSourceId, RpcError } from './decoder';
 import { createLogger } from './logger';
 import { registerTextSource, registerUrlSource } from './rpc';
-import { waitForSourceIdByUrl, waitForSourceReady } from './source-status';
+import { snapshotSourceIds, waitForNewSourceId, waitForSourceIdByUrl, waitForSourceReady } from './source-status';
 import type { AuthSession } from './types';
 import { isYouTubeUrl, validateImportUrl } from './url-import';
 
@@ -33,9 +33,20 @@ async function resolveSourceIdAfterAdd(
   url: string,
   title: string | undefined,
 ): Promise<string> {
+  // Snapshot existing source IDs BEFORE adding, so we can detect the new one
+  const knownIds = await snapshotSourceIds(session, notebookId);
+
+  const importTitle = title?.trim() || (() => {
+    try {
+      return new URL(url).hostname;
+    } catch {
+      return undefined;
+    }
+  })();
+
   const result = await registerUrlSource(session, notebookId, url, {
     youtube: isYouTubeUrl(url),
-    title,
+    title: importTitle,
   });
 
   const direct = sourceIdFromAddResult(result);
@@ -44,10 +55,13 @@ async function resolveSourceIdAfterAdd(
   log.warn('ADD_SOURCE response missing source id — polling notebook sources', {
     url: url.slice(0, 120),
     hasTitle: Boolean(title),
+    knownSourceCount: knownIds.size,
   });
 
-  return waitForSourceIdByUrl(session, notebookId, url, {
-    title,
+  // Look for any new source, OR an existing source matching this URL (duplicate add)
+  return waitForNewSourceId(session, notebookId, knownIds, {
+    url,
+    title: importTitle,
     timeoutMs: SOURCE_LOOKUP_TIMEOUT_MS,
   });
 }

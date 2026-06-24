@@ -69,6 +69,10 @@ export async function rpcCall(
     sourcePath,
     transport: liveSession.tabId ? 'tab-proxy' : 'extension-fetch',
     session: sessionLogContext(liveSession),
+    // Expose first 300 chars of the request body for ADD_SOURCE diagnostics
+    ...(rpcId === RPC_METHODS.ADD_SOURCE
+      ? { reqPreview: bodyText.slice(0, 300) }
+      : {}),
   });
 
   let text: string;
@@ -113,6 +117,10 @@ export async function rpcCall(
       rpcId,
       ms: Math.round(performance.now() - started),
       responseLen: text.length,
+      // Log null ADD_SOURCE result and raw body so we can diagnose silently rejected URLs
+      ...(rpcId === RPC_METHODS.ADD_SOURCE && decoded === null
+        ? { addSourceNullResult: true, rawResponsePreview: text.slice(0, 400) }
+        : {}),
     });
     return decoded;
   } catch (err) {
@@ -210,13 +218,14 @@ function unwrapForLog(value: unknown): unknown {
 function buildUrlSourceParams(
   url: string,
   notebookId: string,
-  options: { youtube?: boolean; title?: string },
+  options: { youtube?: boolean; title?: string } = {},
 ): unknown[] {
   const { youtube = false, title } = options;
 
   if (youtube) {
+    // notebooklm-py: single wrap — [[slots]], not [[[slots]]]
     return [
-      [[[null, null, null, null, null, null, null, [url], null, null, 1]]],
+      [[null, null, null, null, null, null, null, [url], null, null, 1]],
       notebookId,
       [2],
       [1, null, null, null, null, null, null, null, null, null, [1]],
@@ -235,14 +244,24 @@ function buildUrlSourceParams(
     ];
   }
 
-  // notebooklm-py / VCR payload with null slots
+  // notebooklm-py URL format — URL at metadata slot [2]
   return [
-    [[[null, null, [url], null, null, null, null, null]]],
+    [[null, null, [url], null, null, null, null, null]],
     notebookId,
     [2],
     null,
     null,
   ];
+}
+
+function titleForUrlImport(url: string, title?: string): string | undefined {
+  const trimmed = title?.trim();
+  if (trimmed) return trimmed.slice(0, 200);
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Register a URL source; response may be null while NotebookLM creates the source asynchronously. */
@@ -252,14 +271,42 @@ export async function registerUrlSource(
   url: string,
   options: { youtube?: boolean; title?: string } = {},
 ): Promise<unknown> {
-  const params = buildUrlSourceParams(url, notebookId, options);
-  return rpcCall(
-    session,
-    RPC_METHODS.ADD_SOURCE,
-    params,
-    `/notebook/${notebookId}`,
-    { allowNull: true },
-  );
+  const importTitle = titleForUrlImport(url, options.title);
+  const attempts: unknown[][] = [];
+
+  if (options.youtube) {
+    attempts.push(buildUrlSourceParams(url, notebookId, { youtube: true }));
+  } else if (importTitle) {
+    // Golden fixture / UI website import shape
+    attempts.push(buildUrlSourceParams(url, notebookId, { title: importTitle }));
+    // notebooklm-py URL slot format
+    attempts.push(buildUrlSourceParams(url, notebookId));
+  } else {
+    attempts.push(buildUrlSourceParams(url, notebookId));
+  }
+
+  let lastResult: unknown = null;
+  for (let i = 0; i < attempts.length; i++) {
+    const params = attempts[i]!;
+    const result = await rpcCall(
+      session,
+      RPC_METHODS.ADD_SOURCE,
+      params,
+      `/notebook/${notebookId}`,
+      { allowNull: true },
+    );
+    if (result !== null) return result;
+    lastResult = result;
+    if (i < attempts.length - 1) {
+      log.info('ADD_SOURCE returned null — trying alternate payload shape', {
+        url: url.slice(0, 80),
+        attempt: i + 2,
+        totalAttempts: attempts.length,
+      });
+    }
+  }
+
+  return lastResult;
 }
 
 /** Register a text source; response may be null while NotebookLM creates the source asynchronously. */
@@ -270,7 +317,7 @@ export async function registerTextSource(
   content: string,
 ): Promise<unknown> {
   const params = [
-    [[[null, [title, content], null, null, null, null, null, null]]],
+    [[null, [title, content], null, null, null, null, null, null]],
     notebookId,
     [2],
     null,

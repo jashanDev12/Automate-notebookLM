@@ -64,12 +64,19 @@ function parseStatusCode(raw: unknown): SourceStatus {
 function extractIdFromRow(raw: unknown[]): string | null {
   const idBlock = raw[0];
   if (typeof idBlock === 'string' && UUID_RE.test(idBlock)) return idBlock;
-  if (Array.isArray(idBlock)) {
-    if (typeof idBlock[0] === 'string' && UUID_RE.test(idBlock[0])) return idBlock[0];
-    if (Array.isArray(idBlock[2]) && typeof idBlock[2][0] === 'string' && UUID_RE.test(idBlock[2][0])) {
-      return idBlock[2][0];
-    }
+  if (!Array.isArray(idBlock)) return null;
+
+  // Common GET_NOTEBOOK shape: [["uuid"]] at row[0][0][0]
+  if (typeof idBlock[0] === 'string' && UUID_RE.test(idBlock[0])) return idBlock[0];
+  if (Array.isArray(idBlock[0]) && typeof idBlock[0][0] === 'string' && UUID_RE.test(idBlock[0][0])) {
+    return idBlock[0][0];
   }
+
+  // Drive-style envelope: row[0][2][0]
+  if (Array.isArray(idBlock[2]) && typeof idBlock[2][0] === 'string' && UUID_RE.test(idBlock[2][0])) {
+    return idBlock[2][0];
+  }
+
   return null;
 }
 
@@ -145,6 +152,19 @@ function titlesRoughlyMatch(a: string, b: string): boolean {
   return na.slice(0, prefixLen) === nb.slice(0, prefixLen);
 }
 
+/** Find the title string from a source row (row[1] by convention, fallback to first non-UUID string). */
+function findTitleInRow(row: unknown[]): string | null {
+  if (typeof row[1] === 'string' && row[1].length > 0) return row[1];
+  // Fallback: first non-empty string in the row that is not a UUID and not a URL
+  for (let i = 0; i < row.length; i++) {
+    const v = row[i];
+    if (typeof v === 'string' && v.length > 4 && !UUID_RE.test(v) && !v.startsWith('http')) {
+      return v;
+    }
+  }
+  return null;
+}
+
 function collectUrlsFromMetadata(meta: unknown): string[] {
   const urls: string[] = [];
   function walk(node: unknown, depth = 0): void {
@@ -176,21 +196,38 @@ export async function findSourceIdByUrl(
     `/notebook/${notebookId}`,
   );
   const sourcesList = extractSourcesList(result);
+  log.info('GET_NOTEBOOK sources found', {
+    notebookId,
+    sourceCount: sourcesList.length,
+    targetUrl: url.slice(0, 80),
+    targetTitle: title?.slice(0, 60),
+    firstSource: sourcesList[0]
+      ? JSON.stringify(sourcesList[0]).slice(0, 200)
+      : null,
+  });
+
   for (const row of sourcesList) {
     if (!Array.isArray(row)) continue;
 
-    const rowUrl = extractUrlFromSourceRow(row);
-    const candidateUrls = rowUrl
-      ? [rowUrl, ...collectUrlsFromMetadata(row[2])]
-      : collectUrlsFromMetadata(row[2]);
-    if (candidateUrls.some((candidate) => urlsRoughlyMatch(candidate, target))) {
+    // Search the entire row for URLs — NotebookLM may store URL at different
+    // metadata positions depending on how the source was added (title vs. null-slot format).
+    const allUrlsInRow = collectUrlsFromMetadata(row);
+    if (allUrlsInRow.some((candidate) => urlsRoughlyMatch(candidate, target))) {
       const id = extractIdFromRow(row);
-      if (id) return id;
+      if (id) {
+        log.info('Found source by URL match', { id, matchedUrl: allUrlsInRow[0]?.slice(0, 80) });
+        return id;
+      }
     }
 
-    if (title && typeof row[1] === 'string' && titlesRoughlyMatch(title, row[1])) {
+    // Title match as fallback
+    const rowTitle = findTitleInRow(row);
+    if (title && rowTitle && titlesRoughlyMatch(title, rowTitle)) {
       const id = extractIdFromRow(row);
-      if (id) return id;
+      if (id) {
+        log.info('Found source by title match', { id, rowTitle: rowTitle.slice(0, 60) });
+        return id;
+      }
     }
   }
   return null;
@@ -201,6 +238,124 @@ export interface WaitForSourceByUrlOptions {
   timeoutMs?: number;
   intervalMs?: number;
   signal?: AbortSignal;
+}
+
+/** Collect current source IDs from a notebook into a Set. */
+export async function snapshotSourceIds(
+  session: AuthSession,
+  notebookId: string,
+): Promise<Set<string>> {
+  const params = [notebookId, null, [2], null, 0];
+  try {
+    const result = await rpcCall(session, RPC_METHODS.GET_NOTEBOOK, params, `/notebook/${notebookId}`);
+    const sourcesList = extractSourcesList(result);
+    const ids = new Set<string>();
+    for (const row of sourcesList) {
+      if (!Array.isArray(row)) continue;
+      const id = extractIdFromRow(row);
+      if (id) ids.add(id);
+    }
+    log.debug('Snapshot source IDs', { notebookId, count: ids.size });
+    return ids;
+  } catch {
+    return new Set();
+  }
+}
+
+export interface WaitForNewSourceOptions extends WaitForSourceByUrlOptions {
+  /** The URL that was submitted to ADD_SOURCE — used to match an existing (duplicate) source. */
+  url?: string;
+}
+
+/**
+ * Poll GET_NOTEBOOK until either:
+ *   (a) A brand-new source ID appears (async add), or
+ *   (b) An existing source matches the URL/title (duplicate add — server returned null).
+ */
+export async function waitForNewSourceId(
+  session: AuthSession,
+  notebookId: string,
+  knownIds: Set<string>,
+  options: WaitForNewSourceOptions = {},
+): Promise<string> {
+  const timeoutMs = options.timeoutMs ?? 90_000;
+  const intervalMs = options.intervalMs ?? 2_000;
+  const deadline = Date.now() + timeoutMs;
+  const params = [notebookId, null, [2], null, 0];
+  const target = options.url ? normalizeImportUrl(options.url) : null;
+  let attempt = 0;
+
+  while (Date.now() < deadline) {
+    attempt++;
+    const result = await rpcCall(session, RPC_METHODS.GET_NOTEBOOK, params, `/notebook/${notebookId}`);
+    const sourcesList = extractSourcesList(result);
+
+    log.info('Polling for source', {
+      attempt,
+      knownCount: knownIds.size,
+      currentCount: sourcesList.length,
+      targetUrl: options.url?.slice(0, 80),
+    });
+
+    for (const row of sourcesList) {
+      if (!Array.isArray(row)) continue;
+      const id = extractIdFromRow(row);
+      if (!id) {
+        log.info('extractIdFromRow returned null', {
+          rowPreview: JSON.stringify(row).slice(0, 120),
+        });
+        continue;
+      }
+
+      // Case A: brand-new source (async add)
+      if (!knownIds.has(id)) {
+        log.info('New source appeared after ADD_SOURCE', {
+          attempt,
+          sourceId: id,
+          totalSources: sourcesList.length,
+        });
+        return id;
+      }
+
+      // Case B: source was already in the notebook (duplicate add → server returned null).
+      // Check if this known source matches our URL or title.
+      if (target) {
+        const urls = collectUrlsFromMetadata(row);
+        log.info('Checking existing source for URL match', {
+          sourceId: id,
+          foundUrls: urls.map((u) => u.slice(0, 80)),
+          target: target.slice(0, 80),
+        });
+        if (urls.some((u) => urlsRoughlyMatch(u, target))) {
+          log.info('Existing source matches URL (duplicate add)', {
+            attempt,
+            sourceId: id,
+            matchedUrl: urls[0]?.slice(0, 80),
+          });
+          return id;
+        }
+      }
+
+      if (options.title) {
+        const rowTitle = findTitleInRow(row);
+        if (rowTitle && titlesRoughlyMatch(options.title, rowTitle)) {
+          log.info('Existing source matches title (duplicate add)', {
+            attempt,
+            sourceId: id,
+            rowTitle: rowTitle.slice(0, 60),
+          });
+          return id;
+        }
+      }
+    }
+
+    await sleep(intervalMs, options.signal);
+  }
+
+  throw new RpcError(
+    `Source did not appear in notebook within ${Math.round(timeoutMs / 1000)}s`,
+    RPC_METHODS.ADD_SOURCE,
+  );
 }
 
 /** Poll GET_NOTEBOOK until a newly added URL (or title) source appears. */

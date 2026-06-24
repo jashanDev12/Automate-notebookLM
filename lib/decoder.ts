@@ -237,9 +237,20 @@ export function decodeResponse(
       );
     }
 
-    if (options.allowNull) return null;
-
     const status = findWrbStatus(chunks, rpcId);
+
+    if (options.allowNull) {
+      // Async ADD_SOURCE may return a null placeholder frame, but a gRPC error
+      // status means the request was rejected (e.g. INVALID_ARGUMENT).
+      if (status && status.code !== 0) {
+        throw new RpcError(
+          `RPC ${rpcId} returned null with status ${status.code} (${status.label})`,
+          rpcId,
+        );
+      }
+      return null;
+    }
+
     if (status) {
       throw new RpcError(
         `RPC ${rpcId} returned null with status ${status.code} (${status.label})`,
