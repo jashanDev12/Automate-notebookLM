@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { getActiveTab, type ActiveTabInfo } from '../lib/active-tab';
+import { ensureHostAccess, getActiveTab, type ActiveTabInfo } from '../lib/active-tab';
 import { fetchAuthSession } from '../lib/auth';
 import { consumePendingPageImport } from '../lib/import-session';
 import { importTextToNotebook, importUrlToNotebook } from '../lib/import-url';
@@ -96,6 +96,18 @@ export function ImportPage({ notebookId, authed, disabled = false }: Props) {
 
     try {
       validateImportUrl(effectiveUrl);
+
+      // For text scraping we must hold host access to the page's origin.
+      // Request it FIRST (still inside the click gesture) before any other
+      // async work, or Chrome will reject the permission prompt.
+      if (mode === 'text') {
+        const pageUrl = activeTab?.url;
+        if (!activeTab?.tabId || !pageUrl) {
+          throw new Error('Open the page you want to import, then click Import page text.');
+        }
+        await ensureHostAccess(pageUrl);
+      }
+
       const session = await fetchAuthSession();
 
       if (mode === 'url') {

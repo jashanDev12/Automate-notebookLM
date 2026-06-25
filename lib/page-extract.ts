@@ -23,18 +23,30 @@ function truncateContent(text: string): { content: string; truncated: boolean } 
 export async function extractPageContent(tabId: number): Promise<ExtractedPageContent> {
   log.info('Extracting page content', { tabId });
 
-  const [injection] = await chrome.scripting.executeScript({
-    target: { tabId },
-    func: () => {
-      const title = document.title?.trim() || location.href;
-      const clone = document.body?.cloneNode(true) as HTMLElement | null;
-      if (clone) {
-        clone.querySelectorAll('script, style, noscript, svg').forEach((el) => el.remove());
-      }
-      const text = (clone?.innerText ?? document.body?.innerText ?? '').replace(/\s+\n/g, '\n').trim();
-      return { title, text, url: location.href };
-    },
-  });
+  let injection: chrome.scripting.InjectionResult | undefined;
+  try {
+    [injection] = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => {
+        const title = document.title?.trim() || location.href;
+        const clone = document.body?.cloneNode(true) as HTMLElement | null;
+        if (clone) {
+          clone.querySelectorAll('script, style, noscript, svg').forEach((el) => el.remove());
+        }
+        const text = (clone?.innerText ?? document.body?.innerText ?? '').replace(/\s+\n/g, '\n').trim();
+        return { title, text, url: location.href };
+      },
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    log.error('Page extraction script failed', err, { tabId });
+    if (/Cannot access|chrome:\/\/|extension page|Extension manifest|cannot be scripted|chrome-extension:\/\//i.test(message)) {
+      throw new Error(
+        'This page cannot be read by the extension (browser-internal or restricted page). Open a normal http(s) web page and try again.',
+      );
+    }
+    throw new Error('Could not read text from this page. Try Import URL instead.');
+  }
 
   const result = injection?.result as { title: string; text: string; url: string } | undefined;
   if (!result?.text) {

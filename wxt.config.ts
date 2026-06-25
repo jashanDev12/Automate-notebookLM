@@ -32,6 +32,9 @@ export default defineConfig({
       'https://notebooklm.google.com/*',
       'https://*.google.com/*',
     ],
+    // Requested at runtime (per-origin) when the user clicks "Import page text"
+    // so scraping works on any site without an all-sites install warning.
+    optional_host_permissions: ['http://*/*', 'https://*/*'],
     action: {
       default_title: 'NotebookLM Mega Uploader',
     },

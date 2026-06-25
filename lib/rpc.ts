@@ -264,6 +264,11 @@ function titleForUrlImport(url: string, title?: string): string | undefined {
   }
 }
 
+interface UrlSourceAttempt {
+  label: string;
+  params: unknown[];
+}
+
 /** Register a URL source; response may be null while NotebookLM creates the source asynchronously. */
 export async function registerUrlSource(
   session: AuthSession,
@@ -272,41 +277,57 @@ export async function registerUrlSource(
   options: { youtube?: boolean; title?: string } = {},
 ): Promise<unknown> {
   const importTitle = titleForUrlImport(url, options.title);
-  const attempts: unknown[][] = [];
+  const attempts: UrlSourceAttempt[] = [];
 
   if (options.youtube) {
-    attempts.push(buildUrlSourceParams(url, notebookId, { youtube: true }));
-  } else if (importTitle) {
-    // Golden fixture / UI website import shape
-    attempts.push(buildUrlSourceParams(url, notebookId, { title: importTitle }));
-    // notebooklm-py URL slot format
-    attempts.push(buildUrlSourceParams(url, notebookId));
+    attempts.push({ label: 'youtube', params: buildUrlSourceParams(url, notebookId, { youtube: true }) });
   } else {
-    attempts.push(buildUrlSourceParams(url, notebookId));
-  }
-
-  let lastResult: unknown = null;
-  for (let i = 0; i < attempts.length; i++) {
-    const params = attempts[i]!;
-    const result = await rpcCall(
-      session,
-      RPC_METHODS.ADD_SOURCE,
-      params,
-      `/notebook/${notebookId}`,
-      { allowNull: true },
-    );
-    if (result !== null) return result;
-    lastResult = result;
-    if (i < attempts.length - 1) {
-      log.info('ADD_SOURCE returned null — trying alternate payload shape', {
-        url: url.slice(0, 80),
-        attempt: i + 2,
-        totalAttempts: attempts.length,
+    // Proven notebooklm-py production format (URL at metadata slot [2]) — try first.
+    attempts.push({ label: 'url-slot', params: buildUrlSourceParams(url, notebookId) });
+    // UI / golden-fixture title shape as a fallback.
+    if (importTitle) {
+      attempts.push({
+        label: 'title',
+        params: buildUrlSourceParams(url, notebookId, { title: importTitle }),
       });
     }
   }
 
-  return lastResult;
+  let acceptedNull = false;
+  let lastError: unknown = null;
+
+  for (let i = 0; i < attempts.length; i++) {
+    const { label, params } = attempts[i]!;
+    try {
+      const result = await rpcCall(
+        session,
+        RPC_METHODS.ADD_SOURCE,
+        params,
+        `/notebook/${notebookId}`,
+        { allowNull: true },
+      );
+      // Non-null → server returned the source id directly.
+      if (result !== null) return result;
+      // Null with no error → request was accepted, source is being created async.
+      acceptedNull = true;
+    } catch (err) {
+      lastError = err;
+      log.info('ADD_SOURCE payload shape rejected — trying next shape', {
+        url: url.slice(0, 80),
+        shape: label,
+        attempt: i + 1,
+        totalAttempts: attempts.length,
+        reason: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  // At least one shape was accepted (null placeholder) → let caller poll for the source.
+  if (acceptedNull) return null;
+
+  // Every shape was rejected outright — surface the last error.
+  if (lastError) throw lastError;
+  return null;
 }
 
 /** Register a text source; response may be null while NotebookLM creates the source asynchronously. */
