@@ -22,6 +22,8 @@ function statusColor(status: string): string {
       return 'bg-green-500';
     case 'registering':
       return 'bg-sky-400 animate-pulse';
+    case 'queued':
+      return 'bg-slate-300';
     case 'uploading':
       return 'bg-nlm-blue animate-pulse';
     case 'finalizing':
@@ -49,6 +51,8 @@ function statusLabel(
       return 'waiting';
     case 'registering':
       return 'registering';
+    case 'queued':
+      return 'queued';
     case 'uploading':
       return `uploading ${uploadPct}%`;
     case 'finalizing':
@@ -80,6 +84,7 @@ function progressBarWidth(status: string, uploadPct: number): string {
     return '100%';
   }
   if (status === 'registering') return '15%';
+  if (status === 'queued') return '8%';
   return '0%';
 }
 
@@ -88,7 +93,10 @@ export function computeUploadPercent(job: UploadJob): number {
   if (!job.chunks.length) return 0;
   const totalBytes = job.chunks.reduce((sum, c) => sum + c.size, 0);
   if (totalBytes === 0) return 0;
-  const sentBytes = job.chunks.reduce((sum, c) => sum + c.bytesSent, 0);
+  const sentBytes = job.chunks.reduce((sum, c) => {
+    if (c.status === 'completed') return sum + c.size;
+    return sum + c.bytesSent;
+  }, 0);
   return Math.min(100, Math.round((sentBytes / totalBytes) * 100));
 }
 

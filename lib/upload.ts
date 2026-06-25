@@ -192,11 +192,13 @@ import type { AuthSession } from './types';
 
 export type UploadPhase =
   | 'registering'
+  | 'queued'
   | 'uploading'
   | 'finalizing'
   | 'uploaded'
   | 'processing'
-  | 'polling';
+  | 'polling'
+  | 'completed';
 
 export interface UploadFileChunkCallbacks {
   onProgress?: (sent: number, total: number) => void;
@@ -213,9 +215,21 @@ export interface MultiPartProgress {
   sent: number;
   total: number;
   detail?: string;
+  sourceId?: string;
 }
 
 const log = createLogger('upload');
+
+function getResponseHeader(
+  headers: Record<string, string>,
+  name: string,
+): string | undefined {
+  const target = name.toLowerCase();
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === target) return value;
+  }
+  return undefined;
+}
 
 export function pollPhaseFromUpdate(update: SourcePollUpdate): {
   phase: 'processing' | 'polling';
@@ -285,7 +299,7 @@ export async function startResumableUpload(
       bodyText,
     });
     if (!result.ok) throw new Error(`Upload handshake failed (${result.status})`);
-    uploadUrl = result.headers['x-goog-upload-url'] ?? null;
+    uploadUrl = getResponseHeader(result.headers, 'x-goog-upload-url') ?? null;
   } else {
     const response = await fetch(url, {
       method: 'POST',
@@ -553,6 +567,8 @@ export async function uploadFileChunksParallel(
       sourceId,
       contentType,
     );
+
+    onPartProgress?.({ partIndex, phase: 'queued', sent: 0, total: blob.size });
 
     // Acquire upload slot before sending bytes
     await acquireUploadSlot();

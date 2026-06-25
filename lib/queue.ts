@@ -737,6 +737,18 @@ export class SequentialUploadQueue {
     void this.persistJob(job);
   }
 
+  /** Mark the job done as soon as every part reaches a terminal chunk status. */
+  private maybeFinishJobIfDone(job: UploadJob, onProgress: UploadProgressCallback): void {
+    if (job.phase !== 'uploading' && job.phase !== 'retrying') return;
+    if (job.chunks.length === 0) return;
+    const allTerminal = job.chunks.every(
+      (c) => c.status === 'completed' || c.status === 'failed',
+    );
+    if (allTerminal) {
+      this.finishJob(job, onProgress);
+    }
+  }
+
   private touchJob(job: UploadJob): void {
     void this.persistJob(job);
   }
@@ -775,12 +787,21 @@ export class SequentialUploadQueue {
       const chunk = job.chunks[jobIndex];
       chunk.status = p.phase;
       chunk.statusDetail = p.detail;
-      if (p.phase === 'uploading' || p.phase === 'finalizing') {
+      if (p.sourceId) chunk.sourceId = p.sourceId;
+      if (p.phase === 'completed') {
+        chunk.bytesSent = p.total;
+        chunk.error = undefined;
+        chunk.failureKind = undefined;
+      } else if (p.phase === 'uploading' || p.phase === 'finalizing') {
         chunk.bytesSent = p.sent;
-      } else if (p.phase !== 'registering') {
+      } else if (p.phase !== 'registering' && p.phase !== 'queued') {
         chunk.bytesSent = p.total;
       }
       onProgress({ ...job, chunks: [...job.chunks] });
+      this.touchJob(job);
+      if (p.phase === 'completed') {
+        this.maybeFinishJobIfDone(job, onProgress);
+      }
     };
 
     // Mark all as pending before we start so UI resets correctly on retry
@@ -839,6 +860,7 @@ export class SequentialUploadQueue {
           partIndex: i + 1,
           jobIndex: jobIndex + 1,
           filename: chunks[i].filename,
+          errorMessage: formatChunkError(result.reason),
         });
       }
     }
@@ -892,7 +914,7 @@ export class SequentialUploadQueue {
         job.chunks[index].statusDetail = detail;
         if (phase === 'uploading' || phase === 'finalizing') {
           // bytesSent updated via onProgress
-        } else if (phase !== 'registering') {
+        } else if (phase !== 'registering' && phase !== 'queued') {
           job.chunks[index].bytesSent = chunk.size;
         }
         onProgress({ ...job, chunks: [...job.chunks] });
@@ -945,6 +967,7 @@ export class SequentialUploadQueue {
       job.chunks[index].error = undefined;
       onProgress({ ...job, chunks: [...job.chunks] });
       this.touchJob(job);
+      this.maybeFinishJobIfDone(job, onProgress);
     } catch (err) {
       const isCancelled =
         signal.aborted || this.cancelled || (err as Error).name === 'AbortError';
@@ -1092,6 +1115,13 @@ async function uploadFileChunksParallelSettled(
             chunk.contentType,
           );
 
+          onPartProgress?.({
+            partIndex,
+            phase: 'queued',
+            sent: 0,
+            total: chunk.blob.size,
+          });
+
           await acquire();
           options?.signal?.throwIfAborted();
           onPartProgress?.({ partIndex, phase: 'uploading', sent: 0, total: chunk.blob.size });
@@ -1135,8 +1165,17 @@ async function uploadFileChunksParallelSettled(
                 sent: chunk.blob.size,
                 total: chunk.blob.size,
                 detail,
+                sourceId,
               });
             },
+          });
+
+          onPartProgress?.({
+            partIndex,
+            phase: 'completed',
+            sent: chunk.blob.size,
+            total: chunk.blob.size,
+            sourceId,
           });
 
           return { status: 'fulfilled', value: { partIndex, filename: chunk.filename, sourceId } };

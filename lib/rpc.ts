@@ -7,6 +7,11 @@ import type { AuthSession, Notebook, Artifact } from './types';
 
 const log = createLogger('rpc');
 
+/** Shared request-options wrapper required by migrated NotebookLM backends (notebooklm-py #1546). */
+export function buildRpcTemplateBlock(): unknown[] {
+  return [2, null, null, [1, null, null, null, null, null, null, null, null, null, [1]]];
+}
+
 function encodeRpcRequest(rpcId: string, params: unknown[]): unknown[][][] {
   const paramsJson = JSON.stringify(params);
   return [[[rpcId, paramsJson, null, 'generic']]];
@@ -165,12 +170,7 @@ export async function registerFileSource(
   notebookId: string,
   filename: string,
 ): Promise<string> {
-  const params = [
-    [[filename]],
-    notebookId,
-    [2],
-    [1, null, null, null, null, null, null, null, null, null, [1]],
-  ];
+  const params = [[[filename]], notebookId, buildRpcTemplateBlock()];
 
   const result = await rpcCall(
     session,

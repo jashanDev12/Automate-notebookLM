@@ -42,6 +42,7 @@ export type ChunkFailureKind = 'upload' | 'processing_timeout' | 'processing' | 
 export type ChunkStatus =
   | 'pending'
   | 'registering'
+  | 'queued'
   | 'uploading'
   | 'finalizing'
   | 'uploaded'

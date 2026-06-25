@@ -380,13 +380,22 @@ export default function App() {
                     ? job?.phase === 'preparing' && job.prepProgress
                       ? `Splitting… ${Math.min(100, job.prepProgress.percent)}%`
                       : job?.phase === 'uploading' && job.chunks.length > 0
-                        ? job.chunks.some(
-                            (c) => c.status === 'processing' || c.status === 'polling',
-                          )
-                          ? 'NotebookLM processing…'
-                          : job.chunks.some((c) => c.status === 'uploaded')
-                            ? 'Uploaded — waiting for NotebookLM…'
-                            : `Uploading… ${computeUploadPercent(job)}%`
+                        ? (() => {
+                            const done = job.chunks.filter((c) => c.status === 'completed').length;
+                            const total = job.chunks.length;
+                            if (done === total) return 'All parts ready';
+                            if (job.chunks.some(
+                              (c) => c.status === 'processing' || c.status === 'polling',
+                            )) {
+                              return done > 0
+                                ? `NotebookLM processing… (${done}/${total} ready)`
+                                : 'NotebookLM processing…';
+                            }
+                            if (job.chunks.some((c) => c.status === 'uploaded')) {
+                              return `Uploaded — waiting for NotebookLM… (${done}/${total} ready)`;
+                            }
+                            return `Uploading… ${computeUploadPercent(job)}%`;
+                          })()
                         : 'Working…'
                     : 'Start Upload'}
                 </button>

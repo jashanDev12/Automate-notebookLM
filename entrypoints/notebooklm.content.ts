@@ -22,7 +22,7 @@ type ContentMessage =
       headers: Record<string, string>;
     };
 
-const BRIDGE_FLAG = '__notebooklmMegaUploaderBridge';
+const BRIDGE_LISTENER_KEY = '__notebooklmMegaUploaderBridgeListener';
 
 function isContentMessage(value: { type?: string }): value is ContentMessage {
   switch (value.type) {
@@ -50,10 +50,19 @@ export default defineContentScript({
   matches: ['https://notebooklm.google.com/*', 'https://notebooklm.cloud.google.com/*'],
   runAt: 'document_idle',
   main() {
-    if ((globalThis as Record<string, unknown>)[BRIDGE_FLAG]) return;
-    (globalThis as Record<string, unknown>)[BRIDGE_FLAG] = true;
+    const globalScope = globalThis as Record<string, unknown>;
+    const previousListener = globalScope[BRIDGE_LISTENER_KEY] as
+      | ((
+          message: unknown,
+          sender: chrome.runtime.MessageSender,
+          sendResponse: (response?: unknown) => void,
+        ) => boolean | void)
+      | undefined;
+    if (previousListener) {
+      chrome.runtime.onMessage.removeListener(previousListener);
+    }
 
-    chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    const listener = (message: unknown, _sender: chrome.runtime.MessageSender, sendResponse: (response?: unknown) => void): boolean | void => {
       if (!sendResponse || !isContentMessage(message)) return;
       void handleMessage(message)
         .then((result) => sendResponse(result))
@@ -63,7 +72,10 @@ export default defineContentScript({
           });
         });
       return true;
-    });
+    };
+
+    chrome.runtime.onMessage.addListener(listener);
+    globalScope[BRIDGE_LISTENER_KEY] = listener;
   },
 });
 
@@ -117,8 +129,8 @@ async function handleMessage(message: ContentMessage): Promise<unknown> {
     case 'NLM_UPLOAD_CHUNK': {
       const parts = uploadBuffers.get(message.uploadId);
       if (!parts) throw new Error('Upload session expired — try again.');
-      // Decode via fetch('data:...') — native C++ base64 decode, faster than
-      // a charCodeAt loop and avoids the ~64 MB IPC cost of a number[] payload.
+      // Decode via fetch('data:...') — native base64 decode, faster than a
+      // charCodeAt loop and avoids the JSON-size blowup of a number[] payload.
       const res = await fetch(`data:application/octet-stream;base64,${message.dataB64}`);
       parts.push(new Uint8Array(await res.arrayBuffer()));
       return { ok: true };

@@ -2,36 +2,31 @@ import { createLogger, previewText } from './logger';
 
 const log = createLogger('tab-proxy');
 
-/** Transfer large blobs to the NotebookLM tab in 8 MB pieces. */
+/** Transfer large blobs to the NotebookLM tab in 8 MB pieces (Chrome message size limits). */
 const TRANSFER_CHUNK_BYTES = 8 * 1024 * 1024;
+
+/** Chunk transfer to the tab is most of the work; finalize POSTs the full blob to Google. */
+const CHUNK_PROGRESS_RATIO = 0.9;
 
 /**
  * Encode a Uint8Array slice as a base64 string.
  *
- * Why base64 strings instead of number[]:
- *  - Array.from(8 MB) creates 8 M JS numbers; each tagged integer costs ~8 bytes
- *    in Chrome's IPC serialisation → ~64 MB on the wire per chunk (right at the limit).
- *  - A base64 string of the same 8 MB is only ~10.7 MB of chars → ~21 MB UTF-16 on wire.
- *  - btoa + String.fromCharCode.apply run in native C++, far faster than an 8 M-iteration
- *    JS loop.
+ * chrome.tabs.sendMessage serializes payloads as JSON, NOT structured clone.
+ * A Uint8Array becomes {"0":12,"1":255,…} and a number[] becomes [12,255,…];
+ * both explode an 8 MB chunk well past Chrome's 64 MiB message limit. A base64
+ * string of the same 8 MB is only ~10.9 MB of characters, so it stays small.
  *
- * 64 KB sub-blocks prevent call-stack overflow from apply().
+ * 32 KB sub-blocks keep String.fromCharCode.apply() under the call-stack limit.
  */
 function encodeChunkBase64(bytes: Uint8Array, offset: number, end: number): string {
-  const BLOCK = 65536;
+  const BLOCK = 32768;
   let binary = '';
   for (let i = offset; i < end; i += BLOCK) {
-    binary += String.fromCharCode.apply(
-      null,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      bytes.subarray(i, Math.min(i + BLOCK, end)) as any,
-    );
+    const sub = bytes.subarray(i, Math.min(i + BLOCK, end));
+    binary += String.fromCharCode.apply(null, sub as unknown as number[]);
   }
   return btoa(binary);
 }
-
-/** Chunk transfer to the tab is most of the work; finalize POSTs the full blob to Google. */
-const CHUNK_PROGRESS_RATIO = 0.9;
 
 export interface TabProxyBlobUploadCallbacks {
   onProgress?: (sent: number, total: number) => void;
@@ -279,30 +274,61 @@ export async function tabProxyBlobUpload(
   const onProgress = callbacks?.onProgress;
   const onFinalizing = callbacks?.onFinalizing;
 
+  const total = blob.size;
   const uploadId = crypto.randomUUID();
+  const chunkPieces = Math.ceil(total / TRANSFER_CHUNK_BYTES);
   log.info('tabProxyBlobUpload start', {
     tabId,
     uploadId,
-    bytes: blob.size,
-    chunkPieces: Math.ceil(blob.size / TRANSFER_CHUNK_BYTES),
+    bytes: total,
+    chunkPieces,
   });
-  await sendToTab(tabId, { type: 'NLM_UPLOAD_INIT', uploadId });
 
-  onProgress?.(0, blob.size);
+  try {
+    await sendToTab(tabId, { type: 'NLM_UPLOAD_INIT', uploadId });
+  } catch (err) {
+    log.error('tabProxyBlobUpload init failed', err, { tabId, uploadId });
+    throw err;
+  }
 
-  const bytes = new Uint8Array(await blob.arrayBuffer());
-  for (let offset = 0; offset < bytes.length; offset += TRANSFER_CHUNK_BYTES) {
-    const end = Math.min(offset + TRANSFER_CHUNK_BYTES, bytes.length);
-    await sendToTab(tabId, {
-      type: 'NLM_UPLOAD_CHUNK',
-      uploadId,
-      dataB64: encodeChunkBase64(bytes, offset, end),
-    });
-    reportTransferProgress(end, bytes.length, onProgress);
+  onProgress?.(0, total);
+
+  // Read the blob one 8 MB slice at a time instead of materialising the whole
+  // file in memory. This keeps peak memory at ~one chunk per concurrent upload,
+  // so several parts can transfer in parallel safely.
+  for (let offset = 0; offset < total; offset += TRANSFER_CHUNK_BYTES) {
+    const end = Math.min(offset + TRANSFER_CHUNK_BYTES, total);
+    const pieceIndex = Math.floor(offset / TRANSFER_CHUNK_BYTES) + 1;
+    const sliceBytes = new Uint8Array(await blob.slice(offset, end).arrayBuffer());
+    // Base64 string keeps the JSON-serialized message small (see encodeChunkBase64).
+    const dataB64 = encodeChunkBase64(sliceBytes, 0, sliceBytes.length);
+    try {
+      await sendToTab(tabId, {
+        type: 'NLM_UPLOAD_CHUNK',
+        uploadId,
+        dataB64,
+      });
+    } catch (err) {
+      log.error('tabProxyBlobUpload chunk failed', err, {
+        tabId,
+        uploadId,
+        piece: `${pieceIndex}/${chunkPieces}`,
+      });
+      throw err;
+    }
+    if (pieceIndex === 1 || pieceIndex === chunkPieces || pieceIndex % 2 === 0) {
+      log.info('tabProxyBlobUpload chunk sent', {
+        uploadId,
+        piece: `${pieceIndex}/${chunkPieces}`,
+        sentMb: (end / (1024 * 1024)).toFixed(1),
+        totalMb: (total / (1024 * 1024)).toFixed(1),
+      });
+    }
+    reportTransferProgress(end, total, onProgress);
   }
 
   onFinalizing?.();
-  onProgress?.(Math.round(bytes.length * CHUNK_PROGRESS_RATIO), bytes.length);
+  onProgress?.(Math.round(total * CHUNK_PROGRESS_RATIO), total);
 
   const result = await sendToTab<TabUploadResult>(tabId, {
     type: 'NLM_UPLOAD_FINALIZE',
@@ -311,13 +337,14 @@ export async function tabProxyBlobUpload(
     method: 'POST',
     headers,
   });
-  onProgress?.(bytes.length, bytes.length);
+  onProgress?.(total, total);
 
   log.info('tabProxyBlobUpload done', {
     tabId,
     uploadId,
     ok: result.ok,
     status: result.status,
+    ...(result.ok ? {} : { bodyPreview: previewText(result.body, 200) }),
   });
   return result;
 }

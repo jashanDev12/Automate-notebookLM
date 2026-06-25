@@ -517,8 +517,7 @@
 
 
 import { FFmpeg, FFFSType } from '@ffmpeg/ffmpeg';
-import ffmpegWorkerUrl from '@ffmpeg/ffmpeg/worker?url';
-import { fetchFile, toBlobURL } from '@ffmpeg/util';
+import { fetchFile } from '@ffmpeg/util';
 
 import { MAX_CHUNK_BYTES, TARGET_CHUNK_BYTES, TARGET_SPLIT_BYTES } from '../constants';
 import { createLogger, previewText } from '../logger';
@@ -648,6 +647,78 @@ async function isMoovAtStart(file: File): Promise<boolean> {
 let ffmpegInstance: FFmpeg | null = null;
 let loadPromise: Promise<FFmpeg> | null = null;
 let loadingFfmpeg: FFmpeg | null = null;
+/** Bumped on cancel/terminate so in-flight loads cannot assign a stale instance. */
+let loadGeneration = 0;
+/** Fetch + blob-URL the ~32 MB WASM once per extension session (cancel-safe). */
+let cachedCoreUrls: Promise<{ coreURL: string; wasmURL: string; workerURL: string }> | null = null;
+
+const FFMPEG_LOAD_TIMEOUT_MS = 120_000;
+
+function getCachedCoreUrls(
+  coreBase: string,
+): Promise<{ coreURL: string; wasmURL: string; workerURL: string }> {
+  if (!cachedCoreUrls) {
+    cachedCoreUrls = (async () => {
+      // Load the worker, core, and wasm directly from the extension origin ('self').
+      // Using blob: URLs breaks the extension's worker CSP (script-src 'self' …): the
+      // worker would import the core via a blob: URL, which Chrome blocks. Same-origin
+      // chrome-extension:// URLs are allowed and need no dev server.
+      log.info('Resolving FFmpeg core URLs', { coreBase });
+      const coreURL = `${coreBase}/ffmpeg-core.js`;
+      const wasmURL = `${coreBase}/ffmpeg-core.wasm`;
+      const workerURL = `${coreBase}/ffmpeg-worker.js`;
+      log.info('FFmpeg core URLs ready');
+      return { coreURL, wasmURL, workerURL };
+    })();
+  }
+  return cachedCoreUrls;
+}
+
+function invalidateFfmpegLoads(): void {
+  loadGeneration++;
+  loadPromise = null;
+}
+
+function assertLoadCurrent(
+  ffmpeg: FFmpeg,
+  myGeneration: number,
+  signal?: AbortSignal,
+): void {
+  if (signal?.aborted || myGeneration !== loadGeneration) {
+    void ffmpeg.terminate();
+    throw new DOMException('Aborted', 'AbortError');
+  }
+}
+
+function loadFfmpegWithTimeout(
+  ffmpeg: FFmpeg,
+  urls: { coreURL: string; wasmURL: string; workerURL: string },
+): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(
+        new Error(
+          'FFmpeg load timed out after 2 minutes. Reload the extension at chrome://extensions and try again.',
+        ),
+      );
+    }, FFMPEG_LOAD_TIMEOUT_MS);
+
+    void ffmpeg
+      .load({
+        classWorkerURL: urls.workerURL,
+        coreURL: urls.coreURL,
+        wasmURL: urls.wasmURL,
+      })
+      .then(() => {
+        clearTimeout(timer);
+        resolve();
+      })
+      .catch((err: unknown) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+  });
+}
 
 function getExtension(filename: string): string {
   const dot = filename.lastIndexOf('.');
@@ -676,9 +747,9 @@ function bindAbortTermination(signal: AbortSignal | undefined, onAbort: () => vo
 
 function killFfmpegInstance(ffmpeg: FFmpeg): void {
   void ffmpeg.terminate();
+  invalidateFfmpegLoads();
   if (ffmpegInstance === ffmpeg) ffmpegInstance = null;
   if (loadingFfmpeg === ffmpeg) loadingFfmpeg = null;
-  loadPromise = null;
 }
 
 async function execWithAbort(
@@ -708,6 +779,8 @@ async function getFfmpeg(
 ): Promise<FFmpeg> {
   if (ffmpegInstance?.loaded) return ffmpegInstance;
   if (loadPromise) return loadPromise;
+
+  const myGeneration = loadGeneration;
 
   loadPromise = (async () => {
     onProgress?.({
@@ -739,12 +812,13 @@ async function getFfmpeg(
     const loadStart = Date.now();
     const stopHeartbeat = startHeartbeat('FFmpeg WASM load');
     try {
-      log.info('Loading FFmpeg WASM', { coreBase, workerUrl: ffmpegWorkerUrl });
-      await ffmpeg.load({
-        classWorkerURL: ffmpegWorkerUrl,
-        coreURL: await toBlobURL(`${coreBase}/ffmpeg-core.js`, 'text/javascript'),
-        wasmURL: await toBlobURL(`${coreBase}/ffmpeg-core.wasm`, 'application/wasm'),
-      });
+      const urls = await getCachedCoreUrls(coreBase);
+      assertLoadCurrent(ffmpeg, myGeneration, signal);
+
+      log.info('Loading FFmpeg WASM', { coreBase, workerUrl: urls.workerURL });
+      await loadFfmpegWithTimeout(ffmpeg, urls);
+      assertLoadCurrent(ffmpeg, myGeneration, signal);
+
       log.info('FFmpeg loaded', { elapsedSec: elapsedSec(loadStart) });
       onProgress?.({
         phase: 'loading',
@@ -752,9 +826,14 @@ async function getFfmpeg(
         percent: 4,
       });
     } catch (err) {
-      loadPromise = null;
+      if (myGeneration !== loadGeneration) {
+        throw new DOMException('Aborted', 'AbortError');
+      }
+      invalidateFfmpegLoads();
       loadingFfmpeg = null;
-      if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+      if (signal?.aborted) {
+        throw new DOMException('Aborted', 'AbortError');
+      }
       log.error('FFmpeg load failed', err, { coreBase });
       throw new Error(
         `FFmpeg failed to load. Run "npm install" in the project folder to restore public/ffmpeg/, then reload the extension. ` +
@@ -763,9 +842,10 @@ async function getFfmpeg(
     } finally {
       stopHeartbeat();
       releaseAbort();
-      loadingFfmpeg = null;
+      if (loadingFfmpeg === ffmpeg) loadingFfmpeg = null;
     }
 
+    assertLoadCurrent(ffmpeg, myGeneration, signal);
     ffmpegInstance = ffmpeg;
     return ffmpeg;
   })();
@@ -1271,13 +1351,13 @@ export async function compressVideo(
 
 export function terminateFfmpeg(): void {
   log.info('terminateFfmpeg called');
+  invalidateFfmpegLoads();
   if (loadingFfmpeg) {
-    killFfmpegInstance(loadingFfmpeg);
+    void loadingFfmpeg.terminate();
+    loadingFfmpeg = null;
   }
   if (ffmpegInstance) {
-    killFfmpegInstance(ffmpegInstance);
+    void ffmpegInstance.terminate();
+    ffmpegInstance = null;
   }
-  loadPromise = null;
-  loadingFfmpeg = null;
-  ffmpegInstance = null;
 }
