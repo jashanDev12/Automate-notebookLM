@@ -1048,7 +1048,7 @@ async function uploadFileChunksParallelSettled(
   const { getNotebookSource, SourceStatus, waitForSourceReady } = await import('./source-status');
   const { resolveMimeType } = await import('./chunker');
 
-  const CONCURRENCY = 3;
+  const CONCURRENCY = 4;
   let active = 0;
   const queue: Array<() => void> = [];
 

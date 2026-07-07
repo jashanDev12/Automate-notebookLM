@@ -456,10 +456,10 @@ export interface UploadedPart {
 /**
  * How many parts to upload simultaneously.
  *
- * Browser limit is 6 connections per host; we use 3 to leave room for
+ * Browser limit is 6 connections per host; we use 4 to leave room for
  * status-polling and other extension requests running in parallel.
  */
-const UPLOAD_CONCURRENCY = 3;
+const UPLOAD_CONCURRENCY = 4;
 
 /**
  * Upload all parts in parallel (up to UPLOAD_CONCURRENCY at once), then

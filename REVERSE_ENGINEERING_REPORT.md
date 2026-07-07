@@ -168,9 +168,9 @@ The extension uses a bitrate-aware strategy to determine where to split a video 
 ### 7.2 Parallel Processing Logic
 The extension achieves high-speed uploads by processing multiple chunks simultaneously. This is orchestrated by `uploadFileChunksParallel` in `lib/upload.ts`.
 
-1.  **Concurrency Limit:** The extension sets `UPLOAD_CONCURRENCY = 3`. This prevents the browser from being overwhelmed and avoids triggering Google's rate limiting.
+1.  **Concurrency Limit:** The extension sets `UPLOAD_CONCURRENCY = 4`. This prevents the browser from being overwhelmed and avoids triggering Google's rate limiting.
 2.  **Semaphore Mechanism:**
-    -   `acquireUploadSlot()`: Before starting a chunk upload, the engine must "acquire a slot." If 3 uploads are already running, this function returns a promise that stays "pending."
+    -   `acquireUploadSlot()`: Before starting a chunk upload, the engine must "acquire a slot." If 4 uploads are already running, this function returns a promise that stays "pending."
     -   `releaseUploadSlot()`: When an upload finishes (success or failure), it "releases the slot," which resolves the next pending promise in the queue, allowing the next chunk to start.
 3.  **Parallel Execution Flow:**
     -   All chunks are registered (RPC) almost immediately.
